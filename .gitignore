@@ -17,7 +17,6 @@ checkpoints/
 temp/
 cache/
 viz/
-archive/
 checkpoints
 *.npy
 *.png

@@ -1,12 +1,12 @@
 #!/bin/bash
 export CUDA_VISIBLE_DEVICES=0
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-# PRED_LENS=(96 192 336 720)
 MODELS=("DLinear")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1")
-PRED_LENS=(96)
+# PRED_LENS=(96)
+PRED_LENS=(96 192 336 720)
 
 parallel -j 4 --delay 0 '
     GPU=$(( ({#} - 1) % 8 ))

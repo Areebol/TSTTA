@@ -224,34 +224,26 @@ _C.TTA.LINEAR.ADAPTER_MODE = 'learnable'  # 'pretrained' or 'learnable' or 'hybr
 
 # Ours
 _C.TTA.OURS = CN()
-_C.TTA.OURS.USE_CONTEXT = True
 _C.TTA.OURS.LR = 1e-3
-_C.TTA.OURS.GATING_LR_SCALE = 1
 _C.TTA.OURS.PERIOD_N = 1
 _C.TTA.OURS.STEPS = 1
 _C.TTA.OURS.PAAS = True
 _C.TTA.OURS.BATCH_SIZE = 64
-_C.TTA.OURS.GATING_INIT = 0.01
 _C.TTA.OURS.ADJUST_PRED = True
-_C.TTA.OURS.SOFTMAX = True
-_C.TTA.OURS.MIX_MODE = 'orig_plus_weighted_delta'  # or 'weighted_full'
-_C.TTA.OURS.DELTA_NORM = 'none'  # 'none' or 'l2_unit'
 _C.TTA.OURS.S_MAX = 1.0          # rho_eff = S_MAX * sigmoid(rho_raw)
 _C.TTA.OURS.EPS = 1e-6
-_C.TTA.OURS.TEST_TYPES = ''  # test domains
-_C.TTA.OURS.KNOWLEDGE_TYPE = 'adapter'  # 'delta' or 'adapter'
-_C.TTA.OURS.ADAPTER_MODE = 'pretrained'
 
-_C.VAE = CN()
-_C.VAE.LATENT_DIM = 64
-_C.VAE.ENCODER_TYPE = 'mlp'
-_C.VAE.DECODER_TYPE = 'mlp'
-_C.VAE.HIDDEN_DIM = 128
-_C.VAE.BETA = 1.0  # weight of KL divergence
-_C.VAE.RESULT_DIR = 'results/vae/'
-_C.VAE.TRAIN = CN()
-_C.VAE.TRAIN.CHECKPOINT_DIR = 'results/vae/'
+_C.TTA.OURS.LOSS = CN()
+_C.TTA.OURS.LOSS.REG_COEFF = 0.2
 
+_C.TTA.OURS.ADAPTER = CN()
+_C.TTA.OURS.ADAPTER.NAME = 'linear'
+
+_C.TTA.OURS.GATING = CN()
+_C.TTA.OURS.GATING.NAME = 'tanh'
+_C.TTA.OURS.GATING.INIT = 0.01
+_C.TTA.OURS.GATING_LR_SCALE = 1
+_C.TTA.OURS.GATING.WIN_SIZE = 24
 
 
 _C.MODEL = CN()
