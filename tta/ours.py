@@ -147,10 +147,8 @@ class TTARunner(nn.Module):
                     if isinstance(self.gating, CILossTrendGating):
                         se = F.mse_loss(pred, ground_truth, reduction='none')
                         per_channel_mse = se.mean(dim=(0, 1)) # 形状为 [n_vars]
-                        self.gating.update_loss(per_channel_mse)
                     elif isinstance(self.gating, CGLossTrendGating):
                         mse_loss = F.mse_loss(pred, ground_truth)
-                        self.gating.update_loss(mse_loss)
                 self.all_preds_base.append(pred.detach().cpu().numpy())
                 # Adapter Forward (No Grad for evaluation first)
                 with torch.no_grad():
@@ -170,7 +168,10 @@ class TTARunner(nn.Module):
                 mae = F.l1_loss(pred_adapter, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
                 self.mse_all.append(mse)
                 self.mae_all.append(mae)
-
+                if isinstance(self.gating, CILossTrendGating):
+                    self.gating.update_loss(per_channel_mse)
+                elif isinstance(self.gating, CGLossTrendGating):
+                    self.gating.update_loss(mse_loss)
                 batch_start = batch_end
                 batch_idx += 1
 
