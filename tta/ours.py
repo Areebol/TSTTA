@@ -114,8 +114,10 @@ class TTARunner(nn.Module):
         self.all_preds_tta = []
         self.all_gts = []
         self.model.eval()
-
-        for idx, inputs in enumerate(self.test_loader):
+        from tqdm import tqdm
+        pbar = tqdm(self.test_loader, desc="[TTA Progress]", unit="batch")
+        # for idx, inputs in enumerate(self.test_loader):
+        for idx, inputs in enumerate(pbar):
             enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
             batch_start = 0
             batch_end = 0
@@ -271,8 +273,8 @@ class TTARunner(nn.Module):
         return base_pred + gating_coeff * adapter_out
 
     def _report(self):
-        print(f'Number of adaptations: {self.n_adapt}')
-        print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+        # print(f'Number of adaptations: {self.n_adapt}')
+        # print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
         save_tta_results(
             tta_method=self.tta_method,
             seed=self.cfg.SEED,
@@ -285,7 +287,6 @@ class TTARunner(nn.Module):
         full_data = self.data_manager.get_full_data()
         if full_data and self.cfg.TTA.VISUALIZE:
             self.visualizer.plot_all(full_data)
-        print(f"TTA results saved to {self.tta_method} results.")
 
 def build_tta_runner(cfg, model):
     return TTARunner(cfg, model)

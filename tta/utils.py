@@ -9,11 +9,9 @@ def save_summary_to_csv(
     csv_path: Optional[str] = None,
     key_fields: Optional[List[str]] = None
 ):
-    if csv_path is None:
-        csv_path = os.path.join("results", "COSA_tta_summary.csv")
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
 
-    lock_path = csv_path + ".lock"
+    lock_path = "./results/test.lock"
     lock = FileLock(lock_path, timeout=20) 
 
     if key_fields is None:

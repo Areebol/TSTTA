@@ -1,14 +1,13 @@
 #!/bin/bash
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("LSTM")
-# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 # PRED_LENS=(96 192 336 720)
-DATASETS=("ETTh1")
+DATASETS=("weather")
 PRED_LENS=(96 192 336 720)
 
-parallel -j 4 --delay 1 '
-    GPU=$(( ({#} - 1) % 8 ))
+parallel -j 8 --delay 1 '
+    GPU=6
     
     echo "Job {#}: MODEL={1} DATASET={2} PRED={3} -> Running on GPU $GPU"
     

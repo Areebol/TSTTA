@@ -129,5 +129,4 @@ def build_summary_table(input_dir, output_csv, ours_method="DMMA", dataset_names
 
 
 # 示例：
-# build_summary_table("/U_20240109_SZR_SMIL/dengzeshuai/codes/TSF/TSTTA/archive/cosa", "./results/final_tta_summary.csv", ours_method="DMMA", dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"])
 build_summary_table("./results", "./results/final_tta_summary.csv", ours_method="DMMA", dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"])

@@ -12,9 +12,6 @@ import tta.petsa as petsa
 import tta.dynatta as dynatta
 from tta.ours import build_tta_runner
 from config import get_norm_module_cfg
-from datasets.loader import get_test_dataloader
-from models.forecast import forecast
-# from tta.norm_knowledge import extract_original_norm_state
 
 def main():
     args = parse_args()

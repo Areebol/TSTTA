@@ -59,17 +59,15 @@ def load_best_model(cfg, model):
         model_path = os.path.join(cfg.TRAIN.FINETUNE_DIR, '{}_best.pth'.format(cfg.DATA.TYPE))
     else:
         model_path = cfg.TRAIN.RESUME
-    if os.path.isfile(model_path):
-        print(f"Loading checkpoint from {model_path}")
+    try:
         checkpoint = torch.load(model_path, map_location="cpu")
 
         state_dict = checkpoint['model_state']
         msg = model.load_state_dict(state_dict, strict=True)
         assert set(msg.missing_keys) == set()
-
-        print(f"Loaded pre-trained model from {model_path}")
-    else:
-        print("=> no checkpoint found at '{}'".format(model_path))
+    except FileNotFoundError:
+        print("no checkpoint found at '{}'".format(model_path))
+        exit()
 
     return model
 

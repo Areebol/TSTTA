@@ -3,16 +3,16 @@ GPUS=(0 5 6 7)
 NUM_GPUS=${#GPUS[@]}
 
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("DLinear")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-# PRED_LENS=(96 192 336 720)
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # MODELS=("DLinear")
 DATASETS=("ETTh1")
-# PRED_LENS=(96)
+PRED_LENS=(96)
 PRED_LENS=(96 192 336 720)
 
-parallel -j 8 --delay 0 '
-  export CUDA_VISIBLE_DEVICES="1"
+parallel -j 32 --delay 0 '
+  export CUDA_VISIBLE_DEVICES="7"
   SEED=0
 
   MODEL={1}
@@ -39,7 +39,7 @@ parallel -j 8 --delay 0 '
     TEST.ENABLE False \
     TTA.ENABLE True \
     TTA.METHOD "Ours" \
-    TTA.OURS.LR 1e-4 \
+    TTA.OURS.LR 1e-3 \
     TTA.OURS.STEPS 1 \
     TTA.OURS.BATCH_SIZE 24 \
     TTA.OURS.GATING.INIT 0.01 \
@@ -49,11 +49,14 @@ parallel -j 8 --delay 0 '
     TTA.OURS.PAAS False \
     TTA.OURS.ADJUST_PRED False \
     TTA.RESET False \
-    TTA.OURS.GATING.NAME 'ci-loss-trend' \
+    TTA.OURS.ADAPTER.NAME 'low-rank' \
     TTA.OURS.GATING.WIN_SIZE 90 \
-    TTA.OURS.LOSS.REG_COEFF 0.005 \
+    TTA.OURS.GATING.NAME 'ci-loss-trend' \
+    TTA.OURS.LOSS.REG_COEFF 0.01 \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
     # TTA.OURS.GATING.NAME 'abs-tanh' \
+
+python build_table.py
