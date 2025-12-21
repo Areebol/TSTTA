@@ -6,9 +6,9 @@ NUM_GPUS=${#GPUS[@]}
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 # PRED_LENS=(96 192 336 720)
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# MODELS=("FreTS")
+# MODELS=("DLinear")
 DATASETS=("ETTh1")
-PRED_LENS=(96)
+# PRED_LENS=(96)
 PRED_LENS=(96 192 336 720)
 
 parallel -j 8 --delay 0 '
@@ -50,8 +50,9 @@ parallel -j 8 --delay 0 '
     TTA.OURS.ADJUST_PRED False \
     TTA.RESET False \
     TTA.OURS.GATING.NAME 'ci-loss-trend' \
-    TTA.OURS.GATING.WIN_SIZE 48 \
+    TTA.OURS.GATING.WIN_SIZE 90 \
     TTA.OURS.LOSS.REG_COEFF 0.0 \
+    TTA.VISUALIZE True \
     RESULT_DIR ${RESULT_DIR}
 
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"

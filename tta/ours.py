@@ -11,6 +11,8 @@ from tta.utils import save_tta_results
 import matplotlib.pyplot as plt
 from tta.gating import *
 from tta.adapter import adapter_factory
+from tta.utils import TTADataManager
+from tta.visualizer import TTAVisualizer
 
 class TTARunner(nn.Module):
     def __init__(self, cfg, model: nn.Module):
@@ -30,6 +32,11 @@ class TTARunner(nn.Module):
         self._setup_require_grad()
         self._setup_optimizer()
         self._setup_tta_method()
+        self.data_manager = TTADataManager(
+            cfg, 
+            enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
+        )
+        self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.tta_method}", cfg=cfg)
         self.s_max = getattr(cfg.TTA.OURS, 'S_MAX', 1.0)
         self.steps_per_batch = getattr(cfg.TTA.OURS, 'STEPS_PER_BATCH', 1)
 
@@ -96,6 +103,7 @@ class TTARunner(nn.Module):
 
     @torch.enable_grad()
     def adapt(self):
+        self.data_manager.reset()
         self.mse_all = []
         self.mae_all = []
         self.n_adapt = 0
@@ -172,6 +180,13 @@ class TTARunner(nn.Module):
                     self.gating.update_loss(per_channel_mse)
                 elif isinstance(self.gating, CGLossTrendGating):
                     self.gating.update_loss(mse_loss)
+                self.data_manager.collect(
+                base_pred=pred,
+                tta_pred=pred_adapter,
+                gt=ground_truth,
+                gating=self.gating_coeff,
+                mse=mse
+                )
                 batch_start = batch_end
                 batch_idx += 1
 
@@ -252,6 +267,7 @@ class TTARunner(nn.Module):
         adapter_out = self.base_adapter(input_full)
         
         gating_coeff = self.gating(input_full)
+        self.gating_coeff = gating_coeff.squeeze(1)
         return base_pred + gating_coeff * adapter_out
 
     def _report(self):
@@ -266,6 +282,9 @@ class TTARunner(nn.Module):
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
         )
+        full_data = self.data_manager.get_full_data()
+        if full_data and self.cfg.TTA.VISUALIZE:
+            self.visualizer.plot_all(full_data)
         print(f"TTA results saved to {self.tta_method} results.")
 
 def build_tta_runner(cfg, model):
