@@ -124,7 +124,6 @@ class TTAVisualizer:
             plt.close()
 
     def _plot_error_analysis(self, mse_steps):
-        print(mse_steps.shape)
         plt.figure(figsize=(10, 5))
         
         window_size = min(20, len(mse_steps))

@@ -51,8 +51,8 @@ parallel -j 8 --delay 0 '
     TTA.RESET False \
     TTA.OURS.GATING.NAME 'ci-loss-trend' \
     TTA.OURS.GATING.WIN_SIZE 90 \
-    TTA.OURS.LOSS.REG_COEFF 0.0 \
-    TTA.VISUALIZE True \
+    TTA.OURS.LOSS.REG_COEFF 0.005 \
+    TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
