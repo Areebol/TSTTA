@@ -25,6 +25,15 @@ class TTARunner(nn.Module):
             n_vars = getattr(cfg.MODEL, "enc_in", None)
         self.n_vars = n_vars
         self.device = next(self.model.parameters()).device
+        self.s_max = getattr(cfg.TTA.OURS, 'S_MAX', 1.0)
+        self.steps_per_batch = getattr(cfg.TTA.OURS, 'STEPS_PER_BATCH', 1)
+
+        self.cur_step = self.cfg.DATA.SEQ_LEN - 2
+        self.pred_step_end_dict = {}
+        self.inputs_dict = {}
+        self.n_adapt = 0
+        self.mse_all = []
+        self.mae_all = []
         
         self._setup_tta_params()
         self._setup_adapter()
@@ -37,15 +46,6 @@ class TTARunner(nn.Module):
             enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
         )
         self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.tta_method}", cfg=cfg)
-        self.s_max = getattr(cfg.TTA.OURS, 'S_MAX', 1.0)
-        self.steps_per_batch = getattr(cfg.TTA.OURS, 'STEPS_PER_BATCH', 1)
-
-        self.cur_step = self.cfg.DATA.SEQ_LEN - 2
-        self.pred_step_end_dict = {}
-        self.inputs_dict = {}
-        self.n_adapt = 0
-        self.mse_all = []
-        self.mae_all = []
         self._setup_test_loader()
 
     def _calculate_period_and_batch_size(self, enc_window_first):
@@ -201,6 +201,7 @@ class TTARunner(nn.Module):
         self._report()
      
     def _setup_tta_params(self):
+        self.lr = self.cfg.TTA.OURS.LR
         self.adapter_name = self.cfg.TTA.OURS.ADAPTER.NAME
         self.gating_name = self.cfg.TTA.OURS.GATING.NAME
         self.reg_coeff = self.cfg.TTA.OURS.LOSS.REG_COEFF
@@ -255,9 +256,9 @@ class TTARunner(nn.Module):
         self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
 
     def _setup_tta_method(self):
-        self.tta_method = f"adapter-{self.adapter_name}-gating-{self.gating_name}-reg-{self.reg_coeff}"
+        self.tta_method = f"{self.lr}-{self.adapter_name}-{self.gating_name}-reg-{self.reg_coeff}-s-max-{self.s_max}"
         if self.gating_name in ['ci-loss-trend', 'cg-loss-trend']:
-            self.tta_method += f"-gatingwin-{self.gating_win_size}"
+            self.tta_method += f"-{self.gating_win_size}"
 
     def _reset_state(self):
         self._setup_adapter()
