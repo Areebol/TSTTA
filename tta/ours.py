@@ -67,7 +67,7 @@ class TTARunner(nn.Module):
 
             pred, ground_truth = forecast(self.cfg, inputs_history, self.model, None)
 
-            for _ in range(self.cfg.TTA.OURS.STEPS):
+            for _ in range(self.steps_per_batch):
                 self.n_adapt += 1
                 pred_adapted = self._forward_with_adapter(pred, inputs_history[0])
                 mse_loss = F.mse_loss(pred_adapted, ground_truth)
@@ -80,7 +80,7 @@ class TTARunner(nn.Module):
             self.pred_step_end_dict.pop(batch_idx_available)
 
     def _adapt_with_partial_ground_truth(self, pred, ground_truth, period, batch_size, batch_idx, cur_enc_window):
-        for _ in range(self.cfg.TTA.OURS.STEPS):
+        for _ in range(self.steps_per_batch):
             self.n_adapt += 1
             pred_adapted = self._forward_with_adapter(pred, cur_enc_window)
 
@@ -116,7 +116,6 @@ class TTARunner(nn.Module):
         self.model.eval()
         from tqdm import tqdm
         pbar = tqdm(self.test_loader, desc="[TTA Progress]", unit="batch")
-        # for idx, inputs in enumerate(self.test_loader):
         for idx, inputs in enumerate(pbar):
             enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
             batch_start = 0
@@ -125,6 +124,8 @@ class TTARunner(nn.Module):
             self.cur_step = self.cfg.DATA.SEQ_LEN - 2
 
             while batch_end < len(enc_window_all):
+                if self.cfg.TTA.OURS.RESET:
+                    self._reset_state()
                 enc_window_first = enc_window_all[batch_start]
 
                 if self.cfg.TTA.OURS.PAAS:
@@ -274,8 +275,6 @@ class TTARunner(nn.Module):
         return base_pred + gating_coeff * adapter_out
 
     def _report(self):
-        # print(f'Number of adaptations: {self.n_adapt}')
-        # print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
         save_tta_results(
             tta_method=self.tta_method,
             seed=self.cfg.SEED,

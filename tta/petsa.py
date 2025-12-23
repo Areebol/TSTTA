@@ -94,11 +94,6 @@ class Adapter(nn.Module):
 
         # EVED 检测
         ds = self.test_loader.dataset
-        self.is_eved_like = (
-            hasattr(ds, "get_num_test_csvs")
-            and hasattr(ds, "get_test_csv_window_range")
-            and hasattr(ds, "get_test_windows_for_csv")
-        )
     
     def count_parameters(self):
         print("------- PARAMETERS -------")

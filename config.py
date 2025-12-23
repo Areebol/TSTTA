@@ -226,12 +226,13 @@ _C.TTA.LINEAR.ADAPTER_MODE = 'learnable'  # 'pretrained' or 'learnable' or 'hybr
 _C.TTA.OURS = CN()
 _C.TTA.OURS.LR = 1e-3
 _C.TTA.OURS.PERIOD_N = 1
-_C.TTA.OURS.STEPS = 1
+_C.TTA.OURS.STEPS_PER_BATCH = 1
 _C.TTA.OURS.PAAS = True
 _C.TTA.OURS.BATCH_SIZE = 64
 _C.TTA.OURS.ADJUST_PRED = True
 _C.TTA.OURS.S_MAX = 1.0          # rho_eff = S_MAX * sigmoid(rho_raw)
 _C.TTA.OURS.EPS = 1e-6
+_C.TTA.OURS.RESET = False
 
 _C.TTA.OURS.LOSS = CN()
 _C.TTA.OURS.LOSS.REG_COEFF = 0.2

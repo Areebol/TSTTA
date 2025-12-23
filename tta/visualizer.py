@@ -25,6 +25,7 @@ class TTAVisualizer:
             
         self.plot_best_samples_per_channel(data_dict)
         self.plot_worst_samples_per_channel(data_dict)
+        self.plot_sample_predictions(data_dict, sample_idx=1560)
 
     def _plot_predictions(self, base, tta, gt, num_samples=3, start_idx=300,):
         """对比 Ground Truth, 原始预测 和 TTA 后的预测"""
@@ -192,6 +193,19 @@ class TTAVisualizer:
                 prefix="worst_degradation"
             )
 
+    def plot_sample_predictions(self, data_dict, sample_idx):
+        base = data_dict['preds_base']
+        tta = data_dict['preds_tta']
+        gt = data_dict['gts']
+        
+        for c_idx in range(gt.shape[2]):
+            self._draw_adapter_impact_plot(
+                base, tta, gt, 
+                sample_idx=sample_idx, 
+                channel=c_idx,
+                title_suffix=f"",
+                prefix="sample_prediction")
+
     def _draw_adapter_impact_plot(self, base, tta, gt, sample_idx, channel, title_suffix="", prefix="best"):
         delta = tta - base
         y_gt = gt[sample_idx, :, channel]
@@ -206,9 +220,6 @@ class TTAVisualizer:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 9), sharex=True, 
                                        gridspec_kw={'height_ratios': [1, 0.7]})
 
-        # ax1.plot(y_gt, label='Ground Truth', color='#7F7F7F', alpha=0.5, linewidth=1.5, linestyle='-')
-        # ax1.plot(y_base, label='Base Pred', color="#1F77B4", linestyle='--', linewidth=1.5)
-        # ax1.plot(y_tta, label='TTA Pred', color='#D62728', linewidth=1.8, linestyle='-')
         ax1.plot(y_gt, label='Ground Truth', color='#333333', alpha=0.4, linewidth=1.2, linestyle='-')
         ax1.plot(y_base, label='Base Pred', color="#26CE99", linestyle='--', linewidth=1.8)
         ax1.plot(y_tta, label='TTA Pred', color="#EC591F", linewidth=2.2, linestyle='-')

@@ -26,6 +26,16 @@ class TanhGating(BaseGating):
         rho_eff = self.s_max * torch.tanh(self.rho)
         return rho_eff
 
+class AbsGating(BaseGating):
+    def __init__(self, n_vars: int, init_val: float = 0.1, s_max: float = 1.0):
+        super().__init__(n_vars)
+        self.s_max = s_max
+        self.rho = nn.Parameter(init_val * torch.ones(1, 1, n_vars))
+
+    def forward(self, x_ref) -> torch.Tensor:
+        rho_eff = self.s_max * torch.abs(self.rho)
+        return rho_eff
+
 class AbsTanhGating(BaseGating):
     def __init__(self, n_vars: int, init_val: float = 0.1, s_max: float = 1.0):
         super().__init__(n_vars)
@@ -153,6 +163,12 @@ class FixedGating(nn.Module):
 def gating_factory(name, n_vars, window_size, cfg):
     if name == 'tanh':
         return TanhGating(
+            n_vars=n_vars, 
+            init_val=cfg.TTA.OURS.GATING.INIT, 
+            s_max=getattr(cfg.TTA.OURS, 'S_MAX', 1.0)
+        )
+    if name == 'abs':
+        return AbsGating(
             n_vars=n_vars, 
             init_val=cfg.TTA.OURS.GATING.INIT, 
             s_max=getattr(cfg.TTA.OURS, 'S_MAX', 1.0)
