@@ -4,14 +4,13 @@ NUM_GPUS=${#GPUS[@]}
 
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("DLinear" "FreTS")
-DATASETS=("ETTm1" "ETTm2" "exchange_rate" "weather")
+MODELS=("iTransformer" "MICN" "OLS" "PatchTST")
+DATASETS=("ETTh2")
 PRED_LENS=(96)
 PRED_LENS=(96 192 336 720)
 
-parallel -j 32 --delay 0 '
-    IDX=$(( ({#} - 1) % '"${NUM_GPUS}"' ))
-    GPU='"${GPUS}"'[$IDX]
+parallel -j 16 --delay 0 '
+    GPU=0
     SEED=0
     RESULT_DIR="./results/PETSA/"
     BASE_LR=0.001

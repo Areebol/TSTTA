@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math 
 
 class BaseAdapter(nn.Module):
     def __init__(self, pred_len: int, n_vars: int):
@@ -163,6 +164,34 @@ class LowRankGatedAdapter(BaseAdapter):
         delta = x_out
         
         return delta
+
+class GCM(nn.Module):
+    def __init__(self, window_len, n_var=1, gating_module=None, var_wise=True, low_rank=16):
+        super(GCM, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.gating_module = gating_module  # 传入外部定义的门控
+        
+        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+        self.low_rank = low_rank
+        self.lora_A = nn.Parameter(torch.Tensor(window_len, self.low_rank))
+        self.lora_B = nn.Parameter(torch.Tensor(self.low_rank, window_len, n_var))
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B)
+    
+    def forward(self, x):
+        weight = torch.einsum('ik,kjl->ijl', self.lora_A, self.lora_B)
+        gate = self.gating_module(x) 
+        x_1 = gate
+        # else:
+        #     x_1 = torch.tanh(x)
+
+        if self.var_wise:
+            new_x = (torch.einsum('biv,iov->bov', x_1, weight) + self.bias)
+        else:
+            new_x = (torch.einsum('biv,io->bov', x_1, weight) + self.bias)
+        return x + new_x
 
 def adapter_factory(name, pred_len, n_vars, cfg):
     if name == 'linear':
