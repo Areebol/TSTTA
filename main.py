@@ -9,7 +9,7 @@ from utils.misc import set_seeds, set_devices, prepare_inputs
 from tta.tafas import build_adapter
 import tta.cosa as cosa
 import tta.petsa as petsa
-import tta.ours_v1 as ours_v1
+import tta.petsa_loss_gating as petsa_loss_gating
 import tta.dynatta as dynatta
 from tta.ours import build_tta_runner
 from config import get_norm_module_cfg
@@ -61,7 +61,7 @@ def main():
         elif cfg.TTA.METHOD == "Ours":
             adapter = build_tta_runner(cfg, model)
         elif cfg.TTA.METHOD == "Ours-v1":
-            adapter = ours_v1.build_adapter(cfg, model)
+            adapter = petsa_loss_gating.build_adapter(cfg, model)
         else:
             print(f"Unknown TTA method: {cfg.TTA.METHOD}")
         

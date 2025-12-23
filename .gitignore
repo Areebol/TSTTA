@@ -16,7 +16,7 @@ results/
 checkpoints/
 temp/
 cache/
-visualize/
+*visualize*
 checkpoints
 *.npy
 *.png

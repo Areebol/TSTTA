@@ -193,6 +193,18 @@ class GCM(nn.Module):
             new_x = (torch.einsum('biv,io->bov', x_1, weight) + self.bias)
         return x + new_x
 
+class ShiftAdapter(BaseAdapter):
+    def __init__(self, n_vars):
+        super().__init__(0, n_vars)
+        self.scale = nn.Parameter(torch.ones(1, 1, n_vars))
+        self.shift = nn.Parameter(torch.zeros(1, 1, n_vars))
+
+    def forward(self, x):
+        return self.shift
+
+    def setup_require_grad(self, require_grad):
+        return super().setup_require_grad(require_grad)
+
 def adapter_factory(name, pred_len, n_vars, cfg):
     if name == 'linear':
         return LinearAdapter(pred_len=pred_len, n_vars=n_vars)
@@ -202,5 +214,7 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return TimeFreqDualAdapter(pred_len=pred_len, n_vars=n_vars)
     elif name == "low-rank":
         return LowRankGatedAdapter(pred_len=pred_len, n_vars=n_vars, rank=cfg.get('rank', 16))
+    elif name == "shift":
+        return ShiftAdapter(n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")

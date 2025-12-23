@@ -68,6 +68,7 @@ class TTADataManager:
 
     def reset(self):
         self.storage = {
+            "inputs": [],
             "preds_base": [],
             "preds_tta": [],
             "gts": [],
@@ -75,10 +76,10 @@ class TTADataManager:
             "mse_steps": []
         }
 
-    def collect(self, base_pred=None, tta_pred=None, gt=None, gating=None, mse=None):
+    def collect(self, inputs=None, base_pred=None, tta_pred=None, gt=None, gating=None, mse=None):
         if not self.enabled:
             return
-
+        if inputs is not None: self.storage['inputs'].append(inputs.detach().cpu().numpy())
         if base_pred is not None: self.storage["preds_base"].append(base_pred.detach().cpu().numpy())
         if tta_pred is not None: self.storage["preds_tta"].append(tta_pred.detach().cpu().numpy())
         if gt is not None: self.storage["gts"].append(gt.detach().cpu().numpy())
@@ -90,6 +91,7 @@ class TTADataManager:
             return None
         
         return {
+            "inputs": np.concatenate(self.storage["inputs"], axis=0),
             "preds_base": np.concatenate(self.storage["preds_base"], axis=0),
             "preds_tta": np.concatenate(self.storage["preds_tta"], axis=0),
             "gts": np.concatenate(self.storage["gts"], axis=0),

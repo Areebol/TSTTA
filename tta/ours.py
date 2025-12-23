@@ -13,6 +13,7 @@ from tta.gating import *
 from tta.adapter import adapter_factory
 from tta.utils import TTADataManager
 from tta.visualizer import TTAVisualizer
+from tta.loss import PETSALoss
 
 class TTARunner(nn.Module):
     def __init__(self, cfg, model: nn.Module):
@@ -184,6 +185,7 @@ class TTARunner(nn.Module):
                 elif isinstance(self.gating, CGLossTrendGating):
                     self.gating.update_loss(mse_loss)
                 self.data_manager.collect(
+                inputs=cur_enc_window, 
                 base_pred=pred,
                 tta_pred=pred_adapter,
                 gt=ground_truth,

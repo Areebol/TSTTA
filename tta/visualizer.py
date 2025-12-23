@@ -26,6 +26,7 @@ class TTAVisualizer:
         self.plot_best_samples_per_channel(data_dict)
         self.plot_worst_samples_per_channel(data_dict)
         self.plot_sample_predictions(data_dict, sample_idx=1560)
+        self.plot_input_and_predictions(data_dict, sample_idx=1560, channel_idx=0, prefix="full_sequence")
 
     def _plot_predictions(self, base, tta, gt, num_samples=3, start_idx=300,):
         """对比 Ground Truth, 原始预测 和 TTA 后的预测"""
@@ -254,3 +255,88 @@ class TTAVisualizer:
         save_path = os.path.join(self.save_dir, f"{prefix}_impact_var{channel}_s{sample_idx}.png")
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
+        
+    def plot_input_and_predictions(self, data_dict, sample_idx=0, channel_idx=0, prefix="full_sequence"):
+        """
+        核心可视化方法：
+        将 [Input Window] 和 [Prediction Window] 拼接展示，对比 Base Pred 和 TTA Pred。
+        """
+        # 1. 从 data_dict 提取数据并转为 numpy (如果还是 tensor 的话)
+        def to_numpy(x): return x.cpu().numpy() if hasattr(x, 'cpu') else x
+
+        try:
+            # 必须包含的数据
+            inputs = to_numpy(data_dict['inputs'])      # [N, Seq_Len, C]
+            gts = to_numpy(data_dict['gts'])            # [N, Pred_Len, C]
+            base = to_numpy(data_dict['preds_base'])    # [N, Pred_Len, C]
+            tta = to_numpy(data_dict['preds_tta'])      # [N, Pred_Len, C]
+        except KeyError as e:
+            print(f"Visualizer Error: Missing key {e} in data_dict.")
+            return
+
+        # 2. 提取具体样本和通道数据
+        y_inp = inputs[sample_idx, :, channel_idx]
+        y_gt = gts[sample_idx, :, channel_idx]
+        y_base = base[sample_idx, :, channel_idx]
+        y_tta = tta[sample_idx, :, channel_idx]
+        y_delta = y_tta - y_base
+        
+        seq_len = len(y_inp)
+        pred_len = len(y_gt)
+        
+        # 3. 设置时间轴：Input 在前，Prediction 在后
+        x_inp = np.arange(seq_len)
+        x_pred = np.arange(seq_len, seq_len + pred_len)
+
+        # 4. 计算 MSE 和改善程度
+        mse_base = np.mean((y_base - y_gt)**2)
+        mse_tta = np.mean((y_tta - y_gt)**2)
+        improvement = (mse_base - mse_tta) / (mse_base + 1e-9) * 100
+
+        # 5. 绘图
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, 
+                                       gridspec_kw={'height_ratios': [1, 0.4]})
+
+        # --- Subplot 1: Sequence Comparison ---
+        # 历史窗口 (Input)
+        ax1.plot(x_inp, y_inp, label='Input (Lookback)', color='#7f8c8d', linewidth=2, alpha=0.8)
+        
+        # 预测窗口 (GT, Base, TTA)
+        ax1.plot(x_pred, y_gt, label='Ground Truth', color='#2c3e50', linestyle='--', linewidth=1.5)
+        ax1.plot(x_pred, y_base, label='Base Model Pred', color="#26CE99", linestyle='-', alpha=0.6, marker='.', markersize=4)
+        ax1.plot(x_pred, y_tta, label='TTA Adjusted Pred', color="#EC591F", linewidth=2.5)
+
+        # 垂直分割线
+        ax1.axvline(x=seq_len - 1, color='#e74c3c', linestyle='-', linewidth=1.2, alpha=0.7)
+        ax1.text(seq_len - 1, ax1.get_ylim()[1], ' Forecast Start ', color='#e74c3c', 
+                 ha='right', va='top', fontweight='bold', fontsize=10)
+
+        ax1.set_title(f"TTA Adaption Impact | Sample {sample_idx} | Channel {channel_idx}", fontsize=14)
+        ax1.legend(loc='upper left', frameon=True, fontsize=9, ncol=2)
+        ax1.grid(True, alpha=0.2)
+
+        # 标注 MSE 变化
+        info_color = 'green' if improvement > 0 else 'red'
+        info_text = f"Base MSE: {mse_base:.4f}\nTTA MSE:  {mse_tta:.4f}\nChange:   {improvement:+.2f}%"
+        props = dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=info_color)
+        ax1.text(0.98, 0.95, info_text, transform=ax1.transAxes, fontsize=10,
+                 va='top', ha='right', bbox=props, color=info_color, weight='bold', family='monospace')
+
+        # --- Subplot 2: Adapter Contribution (Delta) ---
+        ax2.plot(x_pred, y_delta, label='TTA Adjustment (Delta)', color='#3498db', linewidth=2)
+        ax2.fill_between(x_pred, y_delta, 0, color='#3498db', alpha=0.2)
+        ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
+        ax2.axvline(x=seq_len - 1, color='#e74c3c', linestyle='-', alpha=0.2)
+        
+        ax2.set_ylabel("Delta")
+        ax2.set_xlabel("Time Steps")
+        ax2.legend(loc='upper left', fontsize=9)
+        ax2.grid(True, alpha=0.2)
+
+        # 6. 保存
+        plt.tight_layout()
+        save_name = f"{prefix}_s{sample_idx}_c{channel_idx}.png"
+        save_path = os.path.join(self.save_dir, save_name)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        # print(f"Visualizer: Saved full sequence plot to {save_path}")

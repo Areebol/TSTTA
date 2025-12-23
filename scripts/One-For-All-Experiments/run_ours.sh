@@ -2,13 +2,13 @@
 GPUS=(0 5 6 7)
 NUM_GPUS=${#GPUS[@]}
 
-PRED_LENS=(720)
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 MODELS=("DLinear")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-DATASETS=("ETTh1")
+DATASETS=("ETTh2" "ETTm2")
 PRED_LENS=(96 192 336 720)
-S_MAXS=(1.0)
+# PRED_LENS=(96)
+S_MAXS=(0.5 0.75 0.1 0.25)
 WIN_SIZES=(48)
 REG_COEFFS=(0.01)
 LRS=(0.0001)
@@ -25,9 +25,6 @@ parallel -j 32 --delay 0 '
   REG_COEFF={6}
   LR={7}
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
-
-  OURS_STEPS=1
-  OURS_BATCH_SIZE=24
 
   RESULT_DIR="./results/OURS_tta/${MODEL}/${DATASET}_${PRED_LEN}_adapter_lr${OURS_LR}"
   mkdir -p "${RESULT_DIR}"
@@ -53,11 +50,11 @@ parallel -j 32 --delay 0 '
     TTA.OURS.PAAS False \
     TTA.OURS.ADJUST_PRED False \
     TTA.OURS.RESET False \
-    TTA.OURS.ADAPTER.NAME 'linear' \
+    TTA.OURS.ADAPTER.NAME 'shift' \
     TTA.OURS.GATING.WIN_SIZE ${WIN_SIZE} \
     TTA.OURS.GATING.NAME 'ci-loss-trend' \
     TTA.OURS.LOSS.REG_COEFF ${REG_COEFF} \
-    TTA.VISUALIZE False \
+    TTA.VISUALIZE True \
     RESULT_DIR ${RESULT_DIR}
 
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${S_MAXS[@]}" ::: "${WIN_SIZES[@]}" ::: "${REG_COEFFS[@]}" ::: "${LRS[@]}"
