@@ -4,8 +4,9 @@ export CUDA_VISIBLE_DEVICES=0
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-DATASETS=("ETTh1")
+
 MODELS=("DLinear")
+DATASETS=("ETTh1")
 PRED_LENS=(96)
 
 parallel -j 8 --delay 0 '
@@ -30,8 +31,10 @@ parallel -j 8 --delay 0 '
         TTA.ENABLE True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
-        TTA.TAFAS.GATING_INIT ${GATING_INIT} \
+        TTA.DUAL.GATING_INIT ${GATING_INIT} \
+        TTA.DUAL.CALI_NAME tafas_GCM \
+        TTA.DUAL.LOSS_NAME MSE \
         RESULT_DIR ${RESULT_DIR} \
-        TTA.METHOD TAFAS
+        TTA.METHOD Dual-tta
         
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"

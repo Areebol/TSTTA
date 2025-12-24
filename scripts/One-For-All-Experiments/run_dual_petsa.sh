@@ -1,24 +1,22 @@
 #!/bin/bash
-GPUS=(0 5 6 7)
-NUM_GPUS=${#GPUS[@]}
+export CUDA_VISIBLE_DEVICES=0
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("DLinear")
-DATASETS=("ETTh1")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-PRED_LENS=(96)
 
-parallel -j 16 --delay 0 '
-    GPU=0
+MODELS=("DLinear")
+DATASETS=("ETTh1" "ETTh2")
+PRED_LENS=(96)
+PRED_LENS=(96 192 336 720)
+
+parallel -j 8 --delay 0 '
+    GPU=7
     SEED=0
-    RESULT_DIR="./results/PETSA/"
-    BASE_LR=0.0001
+    BASE_LR=0.001
     WEIGHT_DECAY=0.0001
-    LOW_RANK=16
-    LOSS_ALPHA=0.1
     GATING_INIT=0.01
+    RESULT_DIR="./results/TAFAS/"
 
     echo "Job {#}: MODEL={1} DATASET={2} PRED={3} -> Running on GPU $GPU"
     
@@ -34,10 +32,11 @@ parallel -j 16 --delay 0 '
         TTA.ENABLE True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
-        TTA.PETSA.GATING_INIT ${GATING_INIT} \
-        TTA.PETSA.RANK ${LOW_RANK} \
-        TTA.PETSA.LOSS_ALPHA ${LOSS_ALPHA} \
+        TTA.DUAL.GATING_INIT ${GATING_INIT} \
+        TTA.DUAL.PETSA_LOWRANK 16 \
+        TTA.DUAL.CALI_NAME petsa_GCM \
+        TTA.DUAL.LOSS_NAME PETSA \
         RESULT_DIR ${RESULT_DIR} \
-        TTA.METHOD Ours-v1
+        TTA.METHOD Dual-tta
         
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
