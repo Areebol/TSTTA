@@ -1,5 +1,3 @@
-# adapted from https://github.com/DequanWang/tent/blob/master/tent.py
-
 from typing import List
 from copy import deepcopy
 
@@ -128,7 +126,6 @@ def build_calibration_module(cfg) -> CalibrationContainer:
         raise ValueError(f"Unknown adapter type: {model_type}")
 
     return CalibrationContainer(in_model, out_model)
-
 
 class StandardMSELoss(nn.Module):
     def __init__(self):
@@ -459,51 +456,3 @@ class Adapter(nn.Module):
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
-
-
-class GCM(nn.Module):
-    def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True):
-        super(GCM, self).__init__()
-        self.window_len = window_len
-        self.n_var = n_var
-        self.var_wise = var_wise
-        if var_wise:
-            self.weight = nn.Parameter(torch.Tensor(window_len, window_len, n_var))
-        else:
-            self.weight = nn.Parameter(torch.Tensor(window_len, window_len))
-        self.weight.data.zero_()
-        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
-        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
-
-    def forward(self, x):
-        if self.var_wise:
-            x = x + torch.tanh(self.gating) * (torch.einsum('biv,iov->bov', x, self.weight) + self.bias)
-        else:
-            x = x + torch.tanh(self.gating) * (torch.einsum('biv,io->bov', x, self.weight) + self.bias)
-        return x
-
-
-class Calibration(nn.Module):
-    def __init__(self, cfg):
-        super(Calibration, self).__init__()
-        self.cfg = cfg
-        self.seq_len = cfg.DATA.SEQ_LEN
-        self.pred_len = cfg.DATA.PRED_LEN
-        self.n_var = cfg.DATA.N_VAR
-        self.hidden_dim = cfg.TTA.DUAL.HIDDEN_DIM
-        self.gating_init = cfg.TTA.DUAL.GATING_INIT
-        self.var_wise = cfg.TTA.DUAL.GCM_VAR_WISE
-        if cfg.MODEL.NAME == 'PatchTST':
-            self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
-            self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
-        else:
-            self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
-            self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
-        
-    def input_calibration(self, inputs):
-        enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
-        enc_window = self.in_cali(enc_window)
-        return enc_window, enc_window_stamp, dec_window, dec_window_stamp
-
-    def output_calibration(self, outputs):
-        return self.out_cali(outputs)
