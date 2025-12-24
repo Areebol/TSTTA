@@ -144,6 +144,6 @@ def build_summary_table(input_dir, output_csv, dataset_names=None):
 # 运行
 if __name__ == "__main__":
     build_summary_table("./results", "./results/final_tta_summary.csv", 
-                        # dataset_names=["ETTh1", "ETTm1", "weather"])
-                        dataset_names=["ETTh2", "ETTm2", "exchange_rate"])
+                        dataset_names=["ETTh1", "ETTh2"])
+                        # dataset_names=["ETTh2", "ETTm2", "exchange_rate"])
                         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"])

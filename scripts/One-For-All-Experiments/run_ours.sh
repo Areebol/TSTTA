@@ -5,10 +5,10 @@ NUM_GPUS=${#GPUS[@]}
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 MODELS=("DLinear")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-DATASETS=("ETTh2" "ETTm2")
+DATASETS=("ETTh1" "ETTh2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-S_MAXS=(0.5 0.75 0.1 0.25)
+S_MAXS=(0.5)
 WIN_SIZES=(48)
 REG_COEFFS=(0.01)
 LRS=(0.0001)
@@ -50,7 +50,7 @@ parallel -j 32 --delay 0 '
     TTA.OURS.PAAS False \
     TTA.OURS.ADJUST_PRED False \
     TTA.OURS.RESET False \
-    TTA.OURS.ADAPTER.NAME 'shift' \
+    TTA.OURS.ADAPTER.NAME 'linear' \
     TTA.OURS.GATING.WIN_SIZE ${WIN_SIZE} \
     TTA.OURS.GATING.NAME 'ci-loss-trend' \
     TTA.OURS.LOSS.REG_COEFF ${REG_COEFF} \
