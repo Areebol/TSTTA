@@ -13,7 +13,6 @@ from tta.gating import *
 from tta.adapter import adapter_factory
 from tta.utils import TTADataManager
 from tta.visualizer import TTAVisualizer
-from tta.loss import PETSALoss
 
 class TTARunner(nn.Module):
     def __init__(self, cfg, model: nn.Module):
