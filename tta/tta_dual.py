@@ -15,6 +15,7 @@ from datasets.loader import get_test_dataloader
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
+from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 
 def get_model_dims(cfg):
@@ -67,16 +68,13 @@ class Adapter(nn.Module):
         self.norm_method = get_norm_method(cfg)
         self.norm_module = norm_module
         self.cali = build_calibration_module(cfg).cuda()
-
-        from tta.tta_dual_utils.model_manager import TTAModelManager
-        self.manager = TTAModelManager(model, norm_module, self.cali)
-        
         self.loss_fn = build_loss_fn(cfg)
 
+        self.manager = TTAModelManager(model, norm_module, self.cali)
         trainable_params = self.manager.configure_adaptation(cfg.TTA.MODULE_NAMES_TO_ADAPT)
-        self.optimizer = get_optimizer(trainable_params, cfg.TTA)
-
         self.manager.snapshot()
+
+        self.optimizer = get_optimizer(trainable_params, cfg.TTA)
         self.optimizer_state = deepcopy(self.optimizer.state_dict())
         
         self.test_loader = get_test_dataloader(cfg)
@@ -92,14 +90,14 @@ class Adapter(nn.Module):
         self.mse_all = []
         self.mae_all = []
 
-    def reset(self):
+    def _reset(self):
         self.manager.reset()
         self.optimizer.load_state_dict(deepcopy(self.optimizer_state))
 
-    def switch_model_to_train(self):
+    def _switch_model_to_train(self):
         self.manager.train()
     
-    def switch_model_to_eval(self):
+    def _switch_model_to_eval(self):
         self.manager.eval()   
     
     def _calculate_period_and_batch_size(self, enc_window_first):
@@ -121,7 +119,7 @@ class Adapter(nn.Module):
             for _ in range(self.cfg.TTA.DUAL.STEPS):
                 self.n_adapt += 1
                 
-                self.switch_model_to_train()
+                self._switch_model_to_train()
 
                 if self.cali is not None:
                     inputs_history = self.cali.input_calibration(inputs_history)
@@ -134,7 +132,7 @@ class Adapter(nn.Module):
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                self.switch_model_to_eval()
+                self._switch_model_to_eval()
             
             self.pred_step_end_dict.pop(batch_idx_available)
 
@@ -168,12 +166,28 @@ class Adapter(nn.Module):
             pred[i, period-i:] = pred_after_adapt[i, period-i:]
         return pred, ground_truth
     
+    def _report(self):
+        self.mse_all = np.concatenate(self.mse_all)
+        self.mae_all = np.concatenate(self.mae_all)
+        assert len(self.mse_all) == len(self.test_loader.dataset)
+        
+        save_tta_results(
+            tta_method=self.save_name,
+            seed=self.cfg.SEED,
+            model_name=self.cfg.MODEL.NAME,
+            dataset_name=self.cfg.DATA.NAME,
+            pred_len=self.cfg.DATA.PRED_LEN,
+            mse_after_tta=self.mse_all.mean(),
+            mae_after_tta=self.mae_all.mean(),
+        )
+        self.model.eval()
+    
     @torch.enable_grad()
     def adapt(self):
         is_last = False
         test_len = len(self.test_loader.dataset)
         
-        self.switch_model_to_eval()
+        self._switch_model_to_eval()
         inputs = next(iter(self.test_loader))
         enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
         batch_start = 0
@@ -218,21 +232,7 @@ class Adapter(nn.Module):
             batch_idx += 1
                 
         assert self.cur_step == len(self.test_data) - self.cfg.DATA.PRED_LEN - 1
-
-        self.mse_all = np.concatenate(self.mse_all)
-        self.mae_all = np.concatenate(self.mae_all)
-        assert len(self.mse_all) == len(self.test_loader.dataset)
-        
-        save_tta_results(
-            tta_method=self.save_name,
-            seed=self.cfg.SEED,
-            model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
-            pred_len=self.cfg.DATA.PRED_LEN,
-            mse_after_tta=self.mse_all.mean(),
-            mae_after_tta=self.mae_all.mean(),
-        )
-        self.model.eval()
+        self._report()
             
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
