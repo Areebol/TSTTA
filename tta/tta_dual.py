@@ -37,8 +37,8 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     model_type = getattr(cfg.TTA.DUAL, 'CALI_NAME', 'tafas_GCM')
     
     constructors = {
-        'tafas_GCM': tafas_GCM,
-        'petsa_GCM': petsa_GCM,
+        'tafas-GCM': tafas_GCM,
+        'petsa-GCM': petsa_GCM,
     }
     
     ModelClass = constructors.get(model_type)
@@ -91,7 +91,23 @@ class Adapter(nn.Module):
         self.pred_step_end_dict = {}
         self.inputs_dict = {}
         self.n_adapt = 0
-        self.save_name = f'dual-cali-{self.cfg.TTA.DUAL.CALI_NAME}-loss-{getattr(self.cfg.TTA.DUAL, "LOSS_NAME", "MSE")}-{"in" if self.cfg.TTA.DUAL.CALI_INPUT_ENABLE else ""}-{"out" if self.cfg.TTA.DUAL.CALI_OUTPUT_ENABLE else ""}'
+
+        cali_name = getattr(self.cfg.TTA.DUAL, 'CALI_NAME', 'unknown')
+        loss_name = getattr(self.cfg.TTA.DUAL, 'LOSS_NAME', 'MSE')
+        input_enable = getattr(self.cfg.TTA.DUAL, 'CALI_INPUT_ENABLE', False)
+        output_enable = getattr(self.cfg.TTA.DUAL, 'CALI_OUTPUT_ENABLE', False)
+
+        parts = [
+            f'dual-cali-{cali_name}',
+            f'loss-{loss_name}'
+        ]
+
+        if input_enable:
+            parts.append("in")
+        if output_enable:
+            parts.append("out")
+
+        self.save_name = "-".join(parts)
         self.mse_all = []
         self.mae_all = []
 

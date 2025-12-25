@@ -33,7 +33,7 @@ parallel -j 8 --delay 0 '
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.DUAL.GATING_INIT ${GATING_INIT} \
-        TTA.DUAL.CALI_NAME tafas_GCM \
+        TTA.DUAL.CALI_NAME tafas-GCM \
         TTA.DUAL.LOSS_NAME PETSA \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Dual-tta
