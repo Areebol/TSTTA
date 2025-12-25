@@ -18,12 +18,13 @@ from tta.tta_dual_utils.GCM import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 
-def get_model_dims(cfg):
-    is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-    n_var = 1 if is_patchtst else cfg.DATA.N_VAR
-    return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
 
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
+    def get_model_dims(cfg):
+        is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
+        n_var = 1 if is_patchtst else cfg.DATA.N_VAR
+        return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
+    
     if not cfg.TTA.DUAL.CALI_MODULE:
         return None
     
@@ -44,9 +45,13 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     if not ModelClass:
         raise ValueError(f"Unknown adapter type: {model_type}")
 
-    in_model = ModelClass(seq_len, n_var, **params)
-    out_model = ModelClass(pred_len, n_var, **params)
+    in_model = None
+    out_model = None
     
+    if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
+        in_model = ModelClass(seq_len, n_var, **params)
+    if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
+        out_model = ModelClass(pred_len, n_var, **params)
     return CalibrationContainer(in_model, out_model)
 
 def build_loss_fn(cfg) -> nn.Module:
@@ -86,7 +91,7 @@ class Adapter(nn.Module):
         self.pred_step_end_dict = {}
         self.inputs_dict = {}
         self.n_adapt = 0
-        self.save_name = f'Dual-tta-cali-{self.cfg.TTA.DUAL.CALI_NAME}-loss-{getattr(self.cfg.TTA.DUAL, "LOSS_NAME", "MSE")}'
+        self.save_name = f'dual-cali-{self.cfg.TTA.DUAL.CALI_NAME}-loss-{getattr(self.cfg.TTA.DUAL, "LOSS_NAME", "MSE")}-{"in" if self.cfg.TTA.DUAL.CALI_INPUT_ENABLE else ""}-{"out" if self.cfg.TTA.DUAL.CALI_OUTPUT_ENABLE else ""}'
         self.mse_all = []
         self.mae_all = []
 
@@ -121,11 +126,11 @@ class Adapter(nn.Module):
                 
                 self._switch_model_to_train()
 
-                if self.cali is not None:
+                if self.cali.input_calibration is not None:
                     inputs_history = self.cali.input_calibration(inputs_history)
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
-                if self.cali is not None:
+                if self.cali.output_calibration is not None:
                     pred = self.cali.output_calibration(pred)
                     
                 loss = self.loss_fn(pred, ground_truth) 
@@ -140,11 +145,11 @@ class Adapter(nn.Module):
         for _ in range(self.cfg.TTA.DUAL.STEPS):
             self.n_adapt += 1
             
-            if self.cali is not None:
+            if self.cali.input_calibration is not None:
                 inputs = self.cali.input_calibration(inputs)
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
-            if self.cali is not None:
+            if self.cali.output_calibration is not None:
                 pred = self.cali.output_calibration(pred)
                 
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
@@ -156,10 +161,10 @@ class Adapter(nn.Module):
 
     @torch.no_grad()
     def _adjust_prediction(self, pred, inputs, batch_size, period):
-        if self.cali is not None:
+        if self.cali.input_calibration is not None:
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
-        if self.cali is not None:
+        if self.cali.output_calibration is not None:
             pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
         
         for i in range(batch_size-1):

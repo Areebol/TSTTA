@@ -44,7 +44,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.PETSA_LOWRANK 16 \
         TTA.DUAL.CALI_NAME petsa_GCM \
         TTA.DUAL.LOSS_NAME PETSA \
-        TTA.DUAL.CALI_INPUT_ENABLE True \
+        TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Dual-tta
