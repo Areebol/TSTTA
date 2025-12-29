@@ -51,3 +51,66 @@ class PETSALoss(nn.Module):
                                 ground_truth.mean(dim=1, keepdim=True))
         loss +=  ((coss + loss_var + loss_mean))
         return loss
+    
+class OrthoLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, bases):
+        """
+        bases shape: (N_bases, Window, Window, N_var) 或 (N_bases, Window, Window)
+        """
+        n_bases = bases.shape[0]
+        
+        # 1. Flatten: 把除 N_bases 以外的所有维度展平
+        # shape: (N_bases, -1)
+        flat_bases = bases.view(n_bases, -1)
+        
+        # 2. Normalize: 为了计算 Cosine 相似度，先做 L2 归一化
+        flat_bases_norm = F.normalize(flat_bases, p=2, dim=1)
+        
+        # 3. Gram Matrix: B * B^T
+        # shape: (N_bases, N_bases)
+        gram_matrix = torch.matmul(flat_bases_norm, flat_bases_norm.T)
+        
+        # 4. Target: 单位矩阵 Identity Matrix
+        identity = torch.eye(n_bases, device=bases.device)
+        
+        # 5. MSE: 强迫 Gram 矩阵接近单位矩阵
+        # 这意味着：对自己相似度为1，对别人相似度为0 (正交)
+        return F.mse_loss(gram_matrix, identity)
+
+
+class CoBA_Loss(nn.Module):
+    def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
+        super().__init__()
+        self.task_loss_fn = PETSALoss(alpha=0.1)
+        self.ortho_loss_fn = OrthoLoss()
+        # self.sparse_loss_fn = SparsityLoss()
+        
+        self.lambda_ortho = lambda_ortho
+        self.lambda_sparse = lambda_sparse
+ 
+    def forward(self, pred, ground_truth, bases, coeffs=None):
+        """
+        需要传入四个参数:
+        1. pred: 模型的预测输出
+        2. ground_truth: 真实标签
+        3. coeffs: 模型 forward 产生的混合系数 (用于稀疏 Loss)
+        4. bases: 模型的基向量参数 (用于正交 Loss)
+        """
+        
+        # 1. 任务 Loss (MSE + ...)
+        l_task = self.task_loss_fn(pred, ground_truth)
+        
+        # 2. 正交 Loss
+        l_ortho = self.ortho_loss_fn(bases)
+        
+        # 3. 稀疏 Loss
+        # l_sparse = self.sparse_loss_fn(coeffs)
+        
+        # 总 Loss
+        # l_total = l_task + (self.lambda_ortho * l_ortho) + (self.lambda_sparse * l_sparse)
+        l_total = l_task + (self.lambda_ortho * l_ortho)
+        
+        return l_total

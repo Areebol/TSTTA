@@ -11,12 +11,11 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
-# MODELS=("DLinear")
-# DATASETS=("ETTh1")
+MODELS=("DLinear")
+DATASETS=("ETTh1")
 # PRED_LENS=(96)
 
-# parallel --lb -j ${TOTAL_JOBS} '
-parallel --lb -j 1 '
+parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)
     slot_idx=$(( ({%} - 1) % '"${NGPU}"' ))
     GPU_ID=${gpu_array[$slot_idx]}
@@ -42,9 +41,15 @@ parallel --lb -j 1 '
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.DUAL.GATING_INIT ${GATING_INIT} \
-        TTA.DUAL.CALI_NAME tafas-GCM \
-        TTA.DUAL.LOSS_NAME MSE \
+        TTA.DUAL.PETSA_LOWRANK 16 \
+        TTA.DUAL.CALI_NAME coba-GCM \
+        TTA.DUAL.LOSS_NAME COBA \
+        TTA.DUAL.CALI_INPUT_ENABLE False \
+        TTA.DUAL.CALI_OUTPUT_ENABLE True \
+        TTA.DUAL.GCM_N_BASES 1 \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Dual-tta
         
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+
+python build_table.py

@@ -18,7 +18,7 @@ class EVED(Dataset):
     included in decoder inputs for the future horizon.
     """
     VEHICLE_IDS = ("10", "455", "541")
-    DEFAULT_EV_ROOT = Path("/lichenghao/lzh/workspace/EnergyPrediction/data/eved-dataset/data/segmented_1s_eVED_v9/EV")
+    DEFAULT_EV_ROOT = Path("./data/segmented_1s_eVED_v9/EV")
 
     FOCUS_POINTS_MAP = {
         "crossing": 1,
