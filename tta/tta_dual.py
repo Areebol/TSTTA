@@ -94,8 +94,36 @@ class Adapter(nn.Module):
         self.manager = TTAModelManager(model, norm_module, self.cali)
         trainable_params = self.manager.configure_adaptation(cfg.TTA.MODULE_NAMES_TO_ADAPT)
         self.manager.snapshot()
+        special_lr_params = []
+        base_lr_params = []
+        
+        # special_keyword = getattr(cfg.TTA, 'SPECIAL_KEYWORD', 'calibration') 
+        special_keyword = 'base'
 
-        self.optimizer = get_optimizer(trainable_params, cfg.TTA)
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                if special_keyword in name:
+                    special_lr_params.append(param)
+                else:
+                    base_lr_params.append(param)
+                    
+        optimizer_grouped_parameters = [
+            {
+                'params': base_lr_params, 
+                'lr': cfg.SOLVER.BASE_LR,  # 基础学习率
+            },
+            {
+                'params': special_lr_params, 
+                'lr': cfg.SOLVER.BASE_LR,  # 特殊学习率
+            }
+        ]
+        
+        # self.optimizer = get_optimizer(trainable_params, cfg.TTA)
+        self.optimizer = torch.optim.Adam(
+            optimizer_grouped_parameters,
+            # lr=cfg.SOLVER.BASE_LR,
+            weight_decay=cfg.SOLVER.WEIGHT_DECAY
+        )
         self.optimizer_state = deepcopy(self.optimizer.state_dict())
         
         self.test_loader = get_test_dataloader(cfg)
