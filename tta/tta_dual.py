@@ -73,6 +73,13 @@ def build_loss_fn(cfg) -> nn.Module:
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
+def get_optimizer(optim_params, cfg):
+        return torch.optim.Adam(
+            optim_params,
+            lr=cfg.SOLVER.BASE_LR,
+            weight_decay=cfg.SOLVER.WEIGHT_DECAY
+        )
+
 class Adapter(nn.Module):
     def __init__(self, cfg, model: nn.Module, norm_module=None):
         super(Adapter, self).__init__()
@@ -343,7 +350,7 @@ class Adapter(nn.Module):
                     self._adapt_with_full_ground_truth_if_available()
                     pred, ground_truth = self._adapt_with_partial_ground_truth(inputs_batch, period, batch_size, batch_idx)
 
-                    if self.cfg.TTA.TAFAS.ADJUST_PRED:
+                    if self.cfg.TTA.DUAL.ADJUST_PRED:
                         pred, ground_truth = self._adjust_prediction(pred, inputs_batch, batch_size, period)
 
                     mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
@@ -359,22 +366,7 @@ class Adapter(nn.Module):
                     batch_start = batch_end
                     batch_idx += 1
 
-        self.mse_all = np.concatenate(self.mse_all) if self.mse_all else np.array([])
-        self.mae_all = np.concatenate(self.mae_all) if self.mae_all else np.array([])
-        self.mse_per_var_all = np.concatenate(self.mse_per_var_all, axis=0) if self.mse_per_var_all else np.array([])
-        self.mae_per_var_all = np.concatenate(self.mae_per_var_all, axis=0) if self.mae_per_var_all else np.array([])
-
-        if len(self.mse_all) > 0:
-            print('After TSF-TTA of TAFAS on EVED (per-CSV)')
-            print(f'Number of adaptations: {self.n_adapt}')
-            print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
-            print(f'Test MSE per variable: {self.mse_per_var_all.mean(axis=0)}')
-            print(f'Test MAE per variable: {self.mae_per_var_all.mean(axis=0)}')
-        else:
-            print('No valid test windows for EVED dataset.')
-
         self._report()
-        self.model.eval()
 
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)

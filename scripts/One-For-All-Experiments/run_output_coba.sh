@@ -12,8 +12,9 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
 DATASETS=("ETTh1")
-# PRED_LENS=(96)
+PRED_LENS=(96)
 
 parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)
@@ -46,10 +47,10 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.LOSS_NAME COBA \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
-        TTA.DUAL.GCM_N_BASES 1 \
+        TTA.DUAL.GCM_N_BASES 4 \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Dual-tta
         
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
 
-python build_table.py
+# python build_table.py

@@ -15,10 +15,8 @@ class TTAModelManager:
         self._freeze_all()
 
         modules_to_adapt = self._find_modules_to_adapt(strategy_str)
-        
-        for _, module in modules_to_adapt:
+        for name, module in modules_to_adapt:
             module.requires_grad_(True)
-            
         trainable_params = []
         for model in self.models:
             for param in model.parameters():

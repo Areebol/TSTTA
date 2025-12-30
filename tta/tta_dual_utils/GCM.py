@@ -106,7 +106,6 @@ class CoBA_GCM(nn.Module):
         # 初始化 Basis (类似原本 GCM 初始化为 0，这里建议用很小的值或 Xavier)
         # 为了保证训练初期稳定，初始化为较小的值
         nn.init.xavier_uniform_(self.bases) 
-        # self.bases.data = self.bases.data * 0.01
 
         # ============================================================
         # 2. 辅助组件 (Query Generator + Gating/Bias)
