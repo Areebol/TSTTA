@@ -16,6 +16,11 @@ def construct_loader(cfg, split, batch_size=None):
         batch_size = cfg.TEST.BATCH_SIZE if batch_size is None else batch_size
         shuffle = cfg.TEST.SHUFFLE
         drop_last = cfg.TEST.DROP_LAST
+    elif split == "tta_train":
+        batch_size = cfg.TEST.BATCH_SIZE if batch_size is None else batch_size
+        shuffle = cfg.TEST.SHUFFLE
+        drop_last = cfg.TEST.DROP_LAST
+        split = "train"
     else:
         raise ValueError
 
@@ -58,3 +63,6 @@ def get_val_dataloader(cfg):
 
 def get_test_dataloader(cfg, batch_size=None):
     return construct_loader(cfg, "test", batch_size=batch_size)
+
+def get_tta_train_dataloader(cfg, batch_size=None):
+    return construct_loader(cfg, "tta_train", batch_size=batch_size)

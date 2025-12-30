@@ -13,8 +13,8 @@ PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
-DATASETS=("ETTh1")
-PRED_LENS=(96)
+# DATASETS=("ETTh1")
+# PRED_LENS=(96)
 
 parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)
@@ -48,9 +48,11 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
         TTA.DUAL.GCM_N_BASES 4 \
+        TTA.DUAL.ADJUST_PRED True \
         RESULT_DIR ${RESULT_DIR} \
-        TTA.METHOD Dual-tta
+        TTA.METHOD Ours-tta
         
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
 
 # python build_table.py
+        # TTA.DUAL.CALI_NAME coba-GCM \

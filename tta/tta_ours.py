@@ -107,8 +107,8 @@ class Adapter(nn.Module):
 
         self.tta_train_loader = get_tta_train_dataloader(cfg)
         self.tta_train_data = self.tta_train_loader.dataset.train
-        batch_size = len(self.tta_train_loader.dataset)
-        self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=batch_size)
+        # batch_size = len(self.tta_train_loader.dataset)
+        # self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=batch_size)
         
         self.cur_step = cfg.DATA.SEQ_LEN - 2
         self.pred_step_end_dict = {}
@@ -140,6 +140,28 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_csv_window_range")
             and hasattr(ds, "get_test_windows_for_csv")
         )
+        self._pretrain_adapter()
+        print("Adapter pre-training completed.")
+        
+    def _pretrain_adapter(self):
+        self._switch_model_to_train()
+        for epoch in range(5):
+            for inputs in self.tta_train_loader:
+                enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
+                inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
+                if self.cali.input_calibration is not None:
+                    inputs = self.cali.input_calibration(inputs)
+                pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+                if self.cali.output_calibration is not None:
+                    pred = self.cali.output_calibration(pred)
+                if isinstance(self.loss_fn, CoBA_Loss):
+                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                else:
+                    loss = self.loss_fn(pred, ground_truth) 
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+        self._switch_model_to_eval()
 
     def _reset(self):
         self.manager.reset()
@@ -184,9 +206,9 @@ class Adapter(nn.Module):
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                # self.optimizer.zero_grad()
+                # loss.backward()
+                # self.optimizer.step()
                 self._switch_model_to_eval()
             
             self.pred_step_end_dict.pop(batch_idx_available)
@@ -207,9 +229,9 @@ class Adapter(nn.Module):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
-            self.optimizer.zero_grad()
-            loss_partial.backward()
-            self.optimizer.step()
+            # self.optimizer.zero_grad()
+            # loss_partial.backward()
+            # self.optimizer.step()
         return pred, ground_truth
 
     @torch.no_grad()
@@ -286,7 +308,8 @@ class Adapter(nn.Module):
             
             if self.cfg.TTA.DUAL.ADJUST_PRED:
                 pred, ground_truth = self._adjust_prediction(pred, inputs, batch_size, period)
-            
+            if self.cali.output_calibration is not None:
+                pred = self.cali.output_calibration(pred)
             mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             self.mse_all.append(mse)

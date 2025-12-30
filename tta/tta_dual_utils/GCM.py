@@ -175,7 +175,7 @@ class CoBA_GCM(nn.Module):
         # Softmax 得到稀疏混合系数 w
         # 引入一个 Temperature (可选，这里设为 1)
         coeffs = F.softmax(similarity, dim=-1) # (B, N)
-
+        print(coeffs)
         # ------------------------------------------------------------
         # Step 3: 参数重构 (Reconstruction)
         # ------------------------------------------------------------
