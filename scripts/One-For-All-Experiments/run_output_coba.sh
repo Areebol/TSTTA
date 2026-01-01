@@ -4,17 +4,19 @@ GPUS=(0 1 2 3 4 5 6 7)
 NGPU=${#GPUS[@]}
 GPU_STR="${GPUS[*]}"
 export GPU_STR
-JOBS_PER_GPU=16
+JOBS_PER_GPU=4
 TOTAL_JOBS=$((NGPU * JOBS_PER_GPU))
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
+# MODELS=("PatchTST")
 MODELS=("DLinear")
+# DATASETS=("weather")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
-# DATASETS=("ETTh1")
-# PRED_LENS=(96)
+# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
+PRED_LENS=(96)
 
 parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)
@@ -22,7 +24,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     GPU_ID=${gpu_array[$slot_idx]}
 
     SEED=0
-    BASE_LR=0.001
+    BASE_LR=0.0001
     WEIGHT_DECAY=0.0001
     GATING_INIT=0.01
     RESULT_DIR="./results/TAFAS/"
@@ -47,7 +49,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.LOSS_NAME COBA \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
-        TTA.DUAL.GCM_N_BASES 4 \
+        TTA.DUAL.GCM_N_BASES 8 \
         TTA.DUAL.ADJUST_PRED True \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Ours-tta

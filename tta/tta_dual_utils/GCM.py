@@ -175,7 +175,7 @@ class CoBA_GCM(nn.Module):
         # Softmax 得到稀疏混合系数 w
         # 引入一个 Temperature (可选，这里设为 1)
         coeffs = F.softmax(similarity, dim=-1) # (B, N)
-        print(coeffs)
+        # print(coeffs)
         # ------------------------------------------------------------
         # Step 3: 参数重构 (Reconstruction)
         # ------------------------------------------------------------
@@ -218,6 +218,12 @@ class CoBA_GCM(nn.Module):
         self.coeffs = coeffs
         
         return out
+
+    def get_optim_params(self):
+        params = []
+        params.append(self.gating)
+        params.append(self.bias)
+        return params
 
 class CalibrationContainer(nn.Module):
     def __init__(self, input_model: nn.Module, output_model: nn.Module):
