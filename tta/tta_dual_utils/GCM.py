@@ -89,7 +89,7 @@ class CoBA_GCM(nn.Module):
         self.var_wise = var_wise
         self.n_bases = n_bases
         self.feature_dim = feature_dim
-
+        self.online_mode = False
         self.analyzer = CoBA_Analyzer(self)
         # ============================================================
         # 1. 静态参数 (Memory: Codebook Keys + Basis Set)
@@ -127,6 +127,14 @@ class CoBA_GCM(nn.Module):
         # 保持原本 GCM 的 Bias 和 Gating 逻辑
         self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+
+        if var_wise:
+            self.tafas_weight = nn.Parameter(torch.Tensor(window_len, window_len, n_var))
+        else:
+            self.tafas_weight = nn.Parameter(torch.Tensor(window_len, window_len))
+        self.tafas_weight.data.zero_()
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.tafas_bias = nn.Parameter(torch.zeros(window_len, n_var))
 
     def _get_query(self, x):
         """
@@ -216,8 +224,16 @@ class CoBA_GCM(nn.Module):
         # 加上 Bias (广播机制)
         feat_trans = feat_trans + self.bias
 
-        # 加上 Residual 和 Gating
-        out = x + torch.tanh(self.gating) * feat_trans
+        if self.online_mode:
+            if self.var_wise:
+                tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
+            else:
+                tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
+            print("Using online mode in CoBA_GCM.")
+            out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+        else:
+            # 加上 Residual 和 Gating
+            out = x + torch.tanh(self.gating) * feat_trans
         
         self.coeffs = coeffs
         
@@ -225,8 +241,11 @@ class CoBA_GCM(nn.Module):
 
     def get_optim_params(self):
         params = []
-        params.append(self.gating)
-        params.append(self.bias)
+        # params.append(self.gating)
+        # params.append(self.bias)
+        params.append(self.tafas_weight)
+        params.append(self.tafas_bias)
+        params.append(self.tafas_gating)
         return params
 
 import torch

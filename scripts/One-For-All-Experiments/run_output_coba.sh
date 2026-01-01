@@ -14,7 +14,8 @@ PRED_LENS=(96 192 336 720)
 # MODELS=("PatchTST")
 MODELS=("DLinear")
 DATASETS=("ETTh1")
-# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
+# DATASETS=("ETTh2" "ETTm1" "ETTm2" "weather")
+# DATASETS=("weather")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
 PRED_LENS=(96)
 # PRED_LENS=(720)
@@ -25,7 +26,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     GPU_ID=${gpu_array[$slot_idx]}
 
     SEED=1
-    BASE_LR=0.001
+    BASE_LR=0.0001
     WEIGHT_DECAY=0.0001
     GATING_INIT=0.01
     RESULT_DIR="./results/TAFAS/"

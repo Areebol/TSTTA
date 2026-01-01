@@ -447,6 +447,7 @@ class Adapter(nn.Module):
         self.save_name = "-".join(parts)
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
 
         ds = self.test_loader.dataset
         self.is_eved_like = (
@@ -455,6 +456,8 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
         self._pretrain_adapter()
+        self.cali.out_cali.online_mode = True # Enable online mode after pre-training
+        
         print("Adapter pre-training completed.")
         optim_params = self.cali.out_cali.get_optim_params()
         self.optimizer = torch.optim.Adam(
@@ -580,6 +583,7 @@ class Adapter(nn.Module):
     def _report(self):
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
         save_tta_results(
@@ -592,11 +596,13 @@ class Adapter(nn.Module):
             mae_after_tta=self.mae_all.mean(),
         )
         full_data = self.data_manager.get_full_data()
-        if full_data:
-            self.visualizer.plot_all(full_data)
+        # if full_data:
+        #     self.visualizer.plot_all(full_data)
         self.model.eval()
         self.cali.out_cali.analyzer.plot_stats()
         self.cali.out_cali.analyzer.plot_evolution()
+        print("Final TTA Results:")
+        print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
         # self.cali.out_cali.analyzer.analyze_sequence()
     
     def adapt(self):
@@ -652,9 +658,10 @@ class Adapter(nn.Module):
             tta_pred = pred.clone().detach()
             mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+            mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
             self.mse_all.append(mse)
             self.mae_all.append(mae)
-            
+            self.mse_per_var_all.append(mse_per_var)
             batch_start = batch_end
             batch_idx += 1
             self.data_manager.collect(
