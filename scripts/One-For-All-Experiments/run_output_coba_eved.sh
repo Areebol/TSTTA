@@ -7,10 +7,6 @@ export GPU_STR
 JOBS_PER_GPU=1
 TOTAL_JOBS=$((NGPU * JOBS_PER_GPU))
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-# PRED_LENS=(96 192 336 720)
-
 MODELS=("PatchTST")
 DATASETS=("eVED")
 PRED_LENS=(24)
@@ -26,7 +22,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     GPU_ID=${gpu_array[$slot_idx]}
 
     SEED=0
-    BASE_LR=0.001
+    BASE_LR=0.01
     WEIGHT_DECAY=0.0001
     GATING_INIT=0.01
     RESULT_DIR="./results/TAFAS/"
@@ -55,7 +51,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.PETSA_LOWRANK 16 \
         TTA.DUAL.CALI_NAME coba-GCM \
         TTA.DUAL.LOSS_NAME COBA \
-        TTA.DUAL.GCM_N_BASES 4 \
+        TTA.DUAL.GCM_N_BASES 6 \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
         RESULT_DIR ${RESULT_DIR} \
