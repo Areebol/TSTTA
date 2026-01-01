@@ -16,15 +16,15 @@ MODELS=("DLinear")
 DATASETS=("ETTh1")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
-# PRED_LENS=(96)
-PRED_LENS=(720)
+PRED_LENS=(96)
+# PRED_LENS=(720)
 
 parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)
     slot_idx=$(( ({%} - 1) % '"${NGPU}"' ))
     GPU_ID=${gpu_array[$slot_idx]}
 
-    SEED=0
+    SEED=1
     BASE_LR=0.001
     WEIGHT_DECAY=0.0001
     GATING_INIT=0.01
