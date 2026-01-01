@@ -388,7 +388,7 @@ def build_loss_fn(cfg) -> nn.Module:
         alpha = getattr(cfg.TTA.DUAL, 'PETSA_LOSS_ALPHA', 0.1)
         return PETSALoss(alpha=alpha)
     elif loss_name == "COBA":
-        return CoBA_Loss(lambda_ortho=0.001)
+        return CoBA_Loss(lambda_ortho=0.1)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -469,9 +469,10 @@ class Adapter(nn.Module):
             enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
         )
         self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
+        
     def _pretrain_adapter(self):
         self._switch_model_to_train()
-        for epoch in range(5):
+        for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
             for inputs in self.tta_train_loader:
                 enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
                 inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
@@ -488,6 +489,7 @@ class Adapter(nn.Module):
                 loss.backward()
                 self.optimizer.step()
         self._switch_model_to_eval()
+        visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
 
     def _reset(self):
         self.manager.reset()
@@ -739,3 +741,249 @@ class Adapter(nn.Module):
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
+
+# def visualize_bases_interpretation(model, window_len, var_idx=0):
+#     """
+#     可视化解释 CoBA_GCM 的 Bases
+#     Args:
+#         model: 训练好的 CoBA_GCM 实例
+#         window_len: 时间窗口长度
+#         var_idx: 如果是多变量模式，指定看哪个变量的切片
+#     """
+#     model.eval()
+#     n_bases = model.n_bases
+    
+#     # 提取 Bases 权重
+#     # bases shape: (N, L, L, V) or (N, L, L)
+#     bases = model.bases.detach().cpu()
+#     if model.var_wise:
+#         # 取指定变量的切片 -> (N, L, L)
+#         bases = bases[..., var_idx]
+    
+#     # ==========================================
+#     # 1. 矩阵热力图 (Matrix Heatmap)
+#     # ==========================================
+#     fig, axes = plt.subplots(2, n_bases, figsize=(3 * n_bases, 6))
+#     plt.suptitle(f"Analysis of {n_bases} Bases (Variable {var_idx})", fontsize=16)
+    
+#     for i in range(n_bases):
+#         # 画矩阵权重
+#         ax = axes[0, i]
+#         im = ax.imshow(bases[i], cmap='RdBu_r', interpolation='nearest')
+#         ax.set_title(f"Base {i} Matrix")
+#         ax.axis('off')
+        
+#     # ==========================================
+#     # 2. 典型信号响应 (Probe Signal Response)
+#     # ==========================================
+#     # 构造几种 Probe Signals: (1, L, 1) 用于模拟单变量输入
+#     t = torch.linspace(1, 0, window_len)
+    
+#     probes = {
+#         "Step": (t > 0.5).float(),          # 阶跃
+#         "Trend": t,                         # 线性趋势
+#         "Low Freq": torch.sin(2 * np.pi * 2 * t), # 低频
+#         "High Freq": torch.sin(2 * np.pi * 10 * t)# 高频
+#     }
+    
+#     mixed_input = probes["Step"] + probes["Trend"] + probes["Low Freq"] * 0.5
+#     mixed_input_batch = mixed_input.view(1, window_len, 1).to(bases.device) # (B, L, V_fake)
+    
+#     for i in range(n_bases):
+#         ax = axes[1, i]
+        
+#         # 原始输入
+#         ax.plot(mixed_input.numpy(), label='Input', color='gray', alpha=0.5, linestyle='--')
+        
+#         # 计算 Base i 的独立响应
+#         # (1, L) @ (L, L) -> (1, L)
+#         w_i = bases[i] # (L, L)
+        
+#         response = torch.einsum('i, oi -> o', mixed_input, w_i)
+        
+#         ax.plot(response.numpy(), label=f'Base {i} Out', color='red')
+#         ax.set_title(f"Response (Trend+Noise)")
+#         ax.legend(fontsize=8)
+#         ax.grid(True, alpha=0.3)
+
+#     plt.tight_layout()
+#     plt.savefig("coba_bases_interpretation.png", dpi=300)
+#     plt.show()
+
+# import torch
+# import matplotlib.pyplot as plt
+# import numpy as np
+
+# def visualize_bases_interpretation(model, window_len, var_idx=0):
+#     """
+#     可视化解释 CoBA_GCM 的 Bases (使用脉冲响应 Impulse Response)
+#     Args:
+#         model: 训练好的 CoBA_GCM 实例
+#         window_len: 时间窗口长度
+#         var_idx: 如果是多变量模式，指定看哪个变量的切片
+#     """
+#     model.eval()
+#     n_bases = model.n_bases
+    
+#     # 提取 Bases 权重
+#     # bases shape: (N, L, L, V) or (N, L, L)
+#     bases = model.bases.detach().cpu()
+#     if model.var_wise:
+#         # 取指定变量的切片 -> (N, L, L)
+#         bases = bases[..., var_idx]
+    
+#     # ==========================================
+#     # 1. 矩阵热力图 (Matrix Heatmap)
+#     # ==========================================
+#     fig, axes = plt.subplots(2, n_bases, figsize=(3 * n_bases, 6))
+#     plt.suptitle(f"Analysis of {n_bases} Bases (Variable {var_idx})", fontsize=16)
+    
+#     for i in range(n_bases):
+#         # 画矩阵权重
+#         ax = axes[0, i]
+#         # 使用 RdBu_r 使得 0 对应白色，正负红蓝分明
+#         im = ax.imshow(bases[i], cmap='RdBu_r', interpolation='nearest')
+#         ax.set_title(f"Base {i} Matrix")
+#         ax.axis('off')
+        
+#     # ==========================================
+#     # 2. 脉冲响应 (Impulse Response) - 修改部分
+#     # ==========================================
+#     # 构造一个最纯粹的脉冲信号：全0，中间为1
+#     # 物理意义：在 t = window_len // 2 时刻发生了一次瞬时冲击
+#     input_signal = torch.zeros(window_len)
+#     impulse_idx = window_len // 2
+#     input_signal[impulse_idx] = 1.0
+    
+#     # 为了绘图好看，找到 Response 的最大值范围，统一 Y 轴 (可选)
+#     # y_limit = 0.5 
+    
+#     for i in range(n_bases):
+#         ax = axes[1, i]
+        
+#         # 2.1 画原始输入 (灰色虚线针状)
+#         ax.plot(input_signal.numpy(), label='Input (Impulse)', color='gray', alpha=0.5, linestyle='--')
+        
+#         # 2.2 计算 Base i 的独立响应
+#         # input: (L)
+#         # weight: (Out, In) -> 即 (L, L)
+#         # einsum 'i, oi -> o' 等价于 Matrix Vector Multiplication
+#         w_i = bases[i] # (L, L)
+#         response = torch.einsum('i, oi -> o', input_signal, w_i)
+        
+#         # 2.3 画输出响应 (红色实线)
+#         ax.plot(response.numpy(), label=f'Base {i} Response', color='red', linewidth=1.5)
+        
+#         # 添加一条 y=0 的参考线，方便看正负
+#         ax.axhline(0, color='black', linewidth=0.5, alpha=0.3)
+        
+#         # 设置标题和图例
+#         ax.set_title(f"Impulse Response")
+#         # 如果图例遮挡严重，可以注释掉下面这行，或者只在第一个图画图例
+#         if i == 0:
+#             ax.legend(fontsize=8, loc='upper right')
+#         ax.grid(True, alpha=0.3)
+        
+#         # 可选：根据需要固定 Y 轴范围以便对比幅度
+#         # ax.set_ylim(-1, 1) 
+
+#     plt.tight_layout()
+#     # 保存图片
+#     plt.savefig("coba_bases_impulse_response.png", dpi=300)
+#     plt.show()
+
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+
+def visualize_bases_interpretation(model, window_len, var_idx=0):
+    """
+    可视化解释 CoBA_GCM 的 Bases (多信号综合分析版)
+    """
+    model.eval()
+    n_bases = model.n_bases
+    
+    # 1. 提取 Bases 权重
+    bases = model.bases.detach().cpu()
+    if model.var_wise:
+        bases = bases[..., var_idx] # (N, L, L)
+    
+    # 2. 准备三种探测信号
+    t = torch.linspace(0, 1, window_len)
+    
+    # (A) 脉冲信号: 位于中间，看冲击响应
+    sig_impulse = torch.zeros(window_len)
+    sig_impulse[window_len // 2] = 1.0
+    
+    # (B) 阶跃信号: 在 1/4 处跳变，看对趋势突变的处理
+    sig_step = torch.zeros(window_len)
+    sig_step[window_len // 4:] = 1.0 
+    
+    # (C) 混频信号: 低频正弦 + 高频噪音，看滤波特性
+    # 低频: 2个周期, 高频: 20个周期
+    sig_freq = torch.sin(2 * np.pi * 2 * t) + 0.3 * torch.sin(2 * np.pi * 20 * t)
+
+    # 放到字典里方便循环
+    signals = {
+        "Impulse": sig_impulse,
+        "Step": sig_step,
+        "Freq Mix": sig_freq
+    }
+    
+    # ==========================================
+    # 3. 开始绘图 (Rows: Matrix + 3 Signals)
+    # ==========================================
+    rows = 1 + len(signals) # Matrix + 3 signals
+    fig, axes = plt.subplots(rows, n_bases, figsize=(3 * n_bases, 2.5 * rows), sharex=False)
+    
+    # 设置总标题
+    plt.suptitle(f"Multi-View Analysis of {n_bases} Bases (Variable {var_idx})", fontsize=16, y=0.98)
+    
+    # --- Row 0: 矩阵热力图 ---
+    for i in range(n_bases):
+        ax = axes[0, i]
+        im = ax.imshow(bases[i], cmap='RdBu_r', interpolation='nearest')
+        ax.set_title(f"Base {i} Matrix", fontsize=11, fontweight='bold')
+        ax.axis('off')
+
+    # --- Row 1~3: 信号响应 ---
+    # 遍历每一种信号类型
+    for row_idx, (sig_name, input_sig) in enumerate(signals.items(), start=1):
+        
+        # 统一 Y 轴范围 (可选，根据数据情况调整，设为 None 则自适应)
+        y_max = None 
+        
+        for i in range(n_bases):
+            ax = axes[row_idx, i]
+            
+            # 准备数据
+            base_weight = bases[i] # (L, L)
+            # 计算响应: input(L) @ Weight(L, L) -> output(L)
+            response = torch.einsum('i, oi -> o', input_sig, base_weight)
+            
+            # 绘图
+            ax.plot(input_sig.numpy(), color='gray', linestyle='--', alpha=0.4, linewidth=1, label='In')
+            ax.plot(response.numpy(), color='#d62728', linewidth=1.5, label='Out') # Tab:red
+            
+            # 辅助线
+            ax.axhline(0, color='black', linewidth=0.5, alpha=0.2)
+            
+            # 仅在第一列显示 Y 轴标签（作为行标题）
+            if i == 0:
+                ax.set_ylabel(f"{sig_name}\nResponse", fontsize=10, fontweight='bold')
+                # 在左上角显示图例
+                ax.legend(loc='upper left', fontsize=7, frameon=False)
+            
+            # 去除多余的刻度，保持整洁
+            if row_idx < rows - 1:
+                ax.set_xticks([])
+            
+            ax.grid(True, alpha=0.15)
+            
+            # 标题仅在第一行热力图显示，这里可以显示一些统计信息，或者留空
+            # ax.set_title(f"Mean: {response.mean():.2f}", fontsize=8)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92) # 留出标题空间
+    plt.savefig("coba_bases_multi_view.png", dpi=300)
+    plt.show()
