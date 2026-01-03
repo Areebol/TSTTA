@@ -2,10 +2,12 @@
 export CUDA_VISIBLE_DEVICES=0
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+
 PRED_LENS=(96 192 336 720)
 DATASETS=("ETTh1")
-MODELS=("DLinear")
+TARGETS=("ETTh2")
+# MODELS=("DLinear")
 PRED_LENS=(96)
 
 parallel -j 8 --delay 0 '
@@ -21,6 +23,7 @@ parallel -j 8 --delay 0 '
     CUDA_VISIBLE_DEVICES=$GPU python main.py \
         SEED ${SEED} \
         DATA.NAME {2} \
+        DATA.DOMAIN_SHIFT_TARGET {4} \
         DATA.PRED_LEN {3} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
@@ -28,10 +31,11 @@ parallel -j 8 --delay 0 '
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE False \
         TTA.ENABLE True \
+        TTA.DOMAIN_SHIFT True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.TAFAS.GATING_INIT ${GATING_INIT} \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD TAFAS
         
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"

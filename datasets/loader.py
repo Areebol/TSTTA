@@ -66,3 +66,10 @@ def get_test_dataloader(cfg, batch_size=None):
 
 def get_tta_train_dataloader(cfg, batch_size=None):
     return construct_loader(cfg, "tta_train", batch_size=batch_size)
+
+def get_domain_shift_dataloader(cfg, batch_size=None):
+    orig_dataset_name = cfg.DATA.NAME
+    cfg.DATA.NAME = cfg.DATA.DOMAIN_SHIFT_TARGET
+    loader = construct_loader(cfg, "test", batch_size=batch_size)
+    cfg.DATA.NAME = orig_dataset_name
+    return loader

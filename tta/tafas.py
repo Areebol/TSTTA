@@ -10,7 +10,7 @@ import numpy as np
 
 from models.optimizer import get_optimizer
 from models.forecast import forecast
-from datasets.loader import get_test_dataloader
+from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
 from tta.utils import save_tta_results
@@ -24,7 +24,10 @@ class Adapter(nn.Module):
         self.model = model
         self.norm_method = get_norm_method(cfg)
         self.norm_module = norm_module
-        self.test_loader = get_test_dataloader(cfg)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
         self.test_data = self.test_loader.dataset.test
 
         if self.cfg.TTA.TAFAS.CALI_MODULE:
@@ -48,7 +51,12 @@ class Adapter(nn.Module):
             batch_size = test_num_windows
         else:
             batch_size = len(self.test_loader.dataset)
-        self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
+
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
+        else:
+            self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
+
         self.cur_step = cfg.DATA.SEQ_LEN - 2
         self.pred_step_end_dict = {}
         self.inputs_dict = {}
@@ -212,11 +220,12 @@ class Adapter(nn.Module):
                 'mae': self.mae_all.mean(),
                 'n_adapt': self.n_adapt,
             })
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method='TAFAS',
             seed=self.cfg.SEED,
             model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
+            dataset_name=dataset_name,
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),

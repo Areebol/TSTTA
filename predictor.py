@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from datasets.loader import get_val_dataloader, get_test_dataloader
+from datasets.loader import get_val_dataloader, get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from utils.misc import mkdir
 from config import get_norm_method
@@ -24,6 +24,10 @@ class Predictor:
 
         cfg.TRAIN.SHUFFLE, cfg.TRAIN.DROP_LAST = False, False
         self.val_loader = get_val_dataloader(cfg)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
         self.test_loader = get_test_dataloader(cfg)
         
         self.test_errors, self.val_errors = self._get_test_errors(), self._get_val_errors()
@@ -50,10 +54,11 @@ class Predictor:
         log_dict.update({f"Test/{metric}": value for metric, value in results.items()})
         if self.cfg.WANDB.ENABLE:
             wandb.log(log_dict)
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(tta_method="None",
                          seed=self.cfg.SEED,
                          model_name=self.cfg.MODEL.NAME,
-                         dataset_name=self.cfg.DATA.NAME,
+                         dataset_name=dataset_name,
                          pred_len=self.cfg.DATA.PRED_LEN,
                          mse_after_tta=self.test_errors['mse'].mean().astype(float),
                          mae_after_tta=self.test_errors['mae'].mean().astype(float),)

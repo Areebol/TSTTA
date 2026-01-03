@@ -645,8 +645,8 @@ class SimpleAdapter(nn.Module):
                     # 若启用 PAAS，对后半段进行替换（与原逻辑保持兼容）
                     if self.paas_enabled and period is not None:
                         for i in range(batch_size - 1):
-                            pred_after_adapt[i, period - i:] = pred_after_adapt[i, period - i:]
-                    pred = pred_after_adapt
+                            base_pred[i, period - i:] = pred_after_adapt[i, period - i:]
+                    pred = base_pred
                 self.time_stats['final_prediction'] += time.time() - final_start
                 self.time_counts['final_prediction'] += 1
 
@@ -826,8 +826,8 @@ class SimpleAdapter(nn.Module):
                         pred_after_adapt = self.output_adapter(base_pred, context_data)
                         if self.paas_enabled and period is not None:
                             for i in range(batch_size - 1):
-                                pred_after_adapt[i, period - i:] = pred_after_adapt[i, period - i:]
-                        pred = pred_after_adapt
+                                base_pred[i, period - i:] = pred_after_adapt[i, period - i:]
+                        pred = base_pred
                     self.time_stats['final_prediction'] += time.time() - final_start
                     self.time_counts['final_prediction'] += 1
 
