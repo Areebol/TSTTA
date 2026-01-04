@@ -3,10 +3,12 @@ export CUDA_VISIBLE_DEVICES=0
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-DATASETS=("ETTh1")
-TARGETS=("ETTh2")
-PRED_LENS=(96)
-# PRED_LENS=(96 192 336 720)
+# DATASETS=("ETTh1")
+# TARGETS=("ETTh2")
+DATASETS=("ETTh2")
+TARGETS=("ETTh1")
+# PRED_LENS=(96)
+PRED_LENS=(96 192 336 720)
 
 parallel -j 16 --delay 0 '
     GPU=0

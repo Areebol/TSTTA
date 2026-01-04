@@ -5,10 +5,10 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 
 PRED_LENS=(96 192 336 720)
-DATASETS=("ETTh1")
-TARGETS=("ETTh2")
+DATASETS=("ETTh2")
+TARGETS=("ETTh1")
 # MODELS=("DLinear")
-PRED_LENS=(96)
+# PRED_LENS=(96)
 
 parallel -j 8 --delay 0 '
     GPU=7

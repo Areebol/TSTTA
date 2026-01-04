@@ -12,7 +12,7 @@ from config import get_norm_method
 from models.forecast import forecast
 from utils.misc import prepare_inputs
 from models.optimizer import get_optimizer
-from datasets.loader import get_test_dataloader, get_tta_train_dataloader
+from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_domain_shift_dataloader
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
@@ -416,11 +416,16 @@ class Adapter(nn.Module):
         self.optimizer = get_optimizer(trainable_params, cfg.TTA)
         self.optimizer_state = deepcopy(self.optimizer.state_dict())
         
-        self.test_loader = get_test_dataloader(cfg)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
         self.test_data = self.test_loader.dataset.test
         batch_size = len(self.test_loader.dataset)
-        self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
-
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
+        else:
+            self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
         self.tta_train_loader = get_tta_train_dataloader(cfg)
         self.tta_train_data = self.tta_train_loader.dataset.train
         
@@ -456,13 +461,13 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
         self._pretrain_adapter()
-        # self.cali.out_cali.online_mode = True # Enable online mode after pre-training
+        self.cali.out_cali.online_mode = True # Enable online mode after pre-training
         
         print("Adapter pre-training completed.")
         optim_params = self.cali.out_cali.get_optim_params()
         self.optimizer = torch.optim.Adam(
             optim_params,
-            lr=0,
+            lr=1e-3,
             weight_decay=cfg.SOLVER.WEIGHT_DECAY
         ) 
         
@@ -585,12 +590,12 @@ class Adapter(nn.Module):
         self.mae_all = np.concatenate(self.mae_all)
         self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
-        
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method=self.save_name,
             seed=self.cfg.SEED,
             model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
+            dataset_name=dataset_name,
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),

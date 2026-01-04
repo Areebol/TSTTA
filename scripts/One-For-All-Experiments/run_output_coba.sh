@@ -12,12 +12,13 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 # MODELS=("PatchTST")
-MODELS=("DLinear")
-DATASETS=("ETTh1")
+# MODELS=("DLinear")
+DATASETS=("ETTh2")
+TARGETS=("ETTh1")
 # DATASETS=("ETTh2" "ETTm1" "ETTm2" "weather")
 # DATASETS=("weather")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
-PRED_LENS=(96)
+# PRED_LENS=(96)
 # PRED_LENS=(720)
 
 parallel --lb -j ${TOTAL_JOBS} '
@@ -37,12 +38,14 @@ parallel --lb -j ${TOTAL_JOBS} '
         SEED ${SEED} \
         DATA.NAME {2} \
         DATA.PRED_LEN {3} \
+        DATA.DOMAIN_SHIFT_TARGET {4} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
         TRAIN.ENABLE False \
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE False \
         TTA.ENABLE True \
+        TTA.DOMAIN_SHIFT True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.DUAL.GATING_INIT ${GATING_INIT} \
@@ -57,7 +60,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Ours-tta
         
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"
 
 # python build_table.py
         # TTA.DUAL.CALI_NAME coba-GCM \
