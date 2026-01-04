@@ -127,6 +127,7 @@ class CoBA_GCM(nn.Module):
         # 保持原本 GCM 的 Bias 和 Gating 逻辑
         self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+        # self.bases_bias = nn.Parameter(torch.zeros(n_bases, window_len, n_var))
 
         if var_wise:
             self.tafas_weight = nn.Parameter(torch.Tensor(window_len, window_len, n_var))
@@ -203,6 +204,7 @@ class CoBA_GCM(nn.Module):
             # Bases: (N, L, L)
             w_sample = torch.einsum('bn, nli -> bli', coeffs, self.bases)
 
+        # b_sample = torch.einsum('bn, nlv -> blv', coeffs, self.bases_bias)
         # ------------------------------------------------------------
         # Step 4: 适配运算 (Adaptation / Forward Calculation)
         # ------------------------------------------------------------
@@ -223,6 +225,8 @@ class CoBA_GCM(nn.Module):
 
         # 加上 Bias (广播机制)
         feat_trans = feat_trans + self.bias
+        # feat_trans = feat_trans
+        # feat_trans = feat_trans + b_sample
 
         if self.online_mode:
             if self.var_wise:
