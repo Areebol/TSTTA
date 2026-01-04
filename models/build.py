@@ -60,6 +60,7 @@ def load_best_model(cfg, model):
     else:
         model_path = cfg.TRAIN.RESUME
     try:
+        print(f"Debug: model_path = {model_path}")
         checkpoint = torch.load(model_path, map_location="cpu")
 
         state_dict = checkpoint['model_state']

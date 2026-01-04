@@ -11,7 +11,7 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
-# MODELS=("PatchTST")
+MODELS=("OLS")
 # MODELS=("DLinear")
 DATASETS=("ETTh2")
 TARGETS=("ETTh1")
@@ -19,7 +19,7 @@ TARGETS=("ETTh1")
 # DATASETS=("weather")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
 # PRED_LENS=(96)
-# PRED_LENS=(720)
+PRED_LENS=(720)
 
 parallel --lb -j ${TOTAL_JOBS} '
     gpu_array=($GPU_STR)

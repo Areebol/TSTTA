@@ -29,6 +29,7 @@ from .eved import EVED
 # ============== build dataset ==============
 def build_dataset(cfg, split):
     data_name = cfg.DATA.NAME
+    print(f"Debug: test_data_name = {data_name}")
     dataset_config = dict(
         data_dir=os.path.join(cfg.DATA.BASE_DIR, data_name),
         n_var=cfg.DATA.N_VAR,

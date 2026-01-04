@@ -8,6 +8,7 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTh2")
 TARGETS=("ETTh1")
 # PRED_LENS=(96)
+# MODELS=("DLinear")
 PRED_LENS=(96 192 336 720)
 
 parallel -j 16 --delay 0 '

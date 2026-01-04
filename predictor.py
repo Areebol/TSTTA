@@ -23,12 +23,12 @@ class Predictor:
         self.norm_module = norm_module
 
         cfg.TRAIN.SHUFFLE, cfg.TRAIN.DROP_LAST = False, False
-        self.val_loader = get_val_dataloader(cfg)
         if cfg.TTA.DOMAIN_SHIFT:
             self.test_loader = get_domain_shift_dataloader(cfg)
+            self.val_loader = get_domain_shift_dataloader(cfg)
         else:
+            self.val_loader = get_val_dataloader(cfg)
             self.test_loader = get_test_dataloader(cfg)
-        self.test_loader = get_test_dataloader(cfg)
         
         self.test_errors, self.val_errors = self._get_test_errors(), self._get_val_errors()
 

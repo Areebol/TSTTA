@@ -461,7 +461,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
         self._pretrain_adapter()
-        self.cali.out_cali.online_mode = True # Enable online mode after pre-training
+        # self.cali.out_cali.online_mode = True # Enable online mode after pre-training
         
         print("Adapter pre-training completed.")
         optim_params = self.cali.out_cali.get_optim_params()
