@@ -362,6 +362,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
+            'feature_dim': cfg.TTA.DUAL.GCM_FEA_DIM,
         }
         params.update(coba_params)
     elif model_type == 'identity':
@@ -426,7 +427,7 @@ class Adapter(nn.Module):
             self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
         else:
             self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
-        self.tta_train_loader = get_tta_train_dataloader(cfg)
+        self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=cfg.TRAIN.BATCH_SIZE)
         self.tta_train_data = self.tta_train_loader.dataset.train
         
         self.cur_step = cfg.DATA.SEQ_LEN - 2
@@ -611,6 +612,7 @@ class Adapter(nn.Module):
         self.cali.out_cali.analyzer.plot_stats()
         self.cali.out_cali.analyzer.plot_evolution()
         print("Final TTA Results:")
+        print(f"MSE mean: {self.mse_all.mean()}")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
         # self.cali.out_cali.analyzer.analyze_sequence()
     

@@ -39,13 +39,14 @@ class EVED(Dataset):
         "swing_gate": 16,
     }
 
-    # 13 covariates + 1 target = 14 variables
+    # 12 covariates + 2 target = 14 variables
     FEATURE_COLUMNS = [
         "OAT[DegC]",
         "Air Conditioning Power[Watts]",
         "Heater Power[Watts]",
         "Elevation Smoothed[m]",
         "Gradient Smoothed",
+        # "Gradient Smoothed_2",
         "Speed Limit[km/h]",
         "Intersection",
         "Bus Stops",
@@ -73,6 +74,10 @@ class EVED(Dataset):
         split="train",
         train_ratio=0.7,
         test_ratio=0.2,
+        train_vehicle_ids=None,
+        val_vehicle_ids=None,
+        test_vehicle_ids=None,
+        min_test_len=300,
     ):
         assert split in ("train", "val", "test")
         self.data_dir = data_dir
@@ -88,11 +93,16 @@ class EVED(Dataset):
         self.split = split
         self.train_ratio = train_ratio
         self.test_ratio = test_ratio
+        self.train_vehicle_ids = train_vehicle_ids
+        self.val_vehicle_ids = val_vehicle_ids if train_vehicle_ids is not None else train_vehicle_ids
+        self.test_vehicle_ids = test_vehicle_ids
+        self.min_test_len = min_test_len
 
         # 准备 future_known 信息
         self._future_known_names = [
             "Elevation Smoothed[m]",
             "Gradient Smoothed",
+            # "Gradient Smoothed_2",
             "Speed Limit[km/h]",
             "Intersection",
             "Bus Stops",
@@ -152,7 +162,22 @@ class EVED(Dataset):
 
     def _collect_split_file_lists(self, ev_root: Path):
         train_files, val_files, test_files = [], [], []
-        for vid in self.VEHICLE_IDS:
+
+        def _resolve_ids(ids):
+            if ids is None:
+                return self.VEHICLE_IDS
+            if isinstance(ids, str):
+                return (ids,)
+            return tuple(ids)
+
+        train_vids = _resolve_ids(self.train_vehicle_ids)
+        val_vids = _resolve_ids(self.val_vehicle_ids)
+        test_vids = _resolve_ids(self.test_vehicle_ids)
+        
+        # Collect all unique vehicle IDs involved
+        all_vids = sorted(list(set(train_vids) | set(val_vids) | set(test_vids)))
+
+        for vid in all_vids:
             vdir = ev_root / vid
             if not vdir.exists():
                 continue
@@ -166,9 +191,15 @@ class EVED(Dataset):
             n_train = max(0, min(n_train, n))  # clamp
             n_val = max(0, min(n_val, n - n_train))
             n_test = max(0, n - n_train - n_val)
-            train_files.extend(files[:n_train])
-            val_files.extend(files[n_train:n_train + n_val])
-            test_files.extend(files[n_train + n_val:])
+            
+            if vid in train_vids:
+                train_files.extend(files[:n_train])
+            if vid in val_vids:
+                val_files.extend(files[n_train:n_train + n_val])
+            if vid in test_vids:
+                test_files.extend(files[n_train + n_val:])
+
+        self.test_files = test_files
         return {"train": train_files, "val": val_files, "test": test_files}
 
     def _load_data(self):
@@ -265,6 +296,11 @@ class EVED(Dataset):
                 L = len(data_np)
                 if L < self.seq_len + self.pred_len:
                     continue  # too short
+                
+                # Filter out short trips for testing
+                if split_name == "test" and L < self.min_test_len:
+                    continue
+
                 if split_name == "train":
                     train_chunks.append(data_np)
                     train_stamp_chunks.append(stamp_np)
@@ -393,6 +429,8 @@ class EVED(Dataset):
             self.train = (Xtr - mu) / sd_safe
             self.val = (Xva - mu) / sd_safe
             self.test = (Xte - mu) / sd_safe
+            self.mu = mu
+            self.sd = sd_safe
         elif self.scale == "min-max":
             mn = np.nanmin(Xtr, axis=0)
             mx = np.nanmax(Xtr, axis=0)
@@ -400,11 +438,24 @@ class EVED(Dataset):
             self.train = (Xtr - mn) / denom
             self.val = (Xva - mn) / denom
             self.test = (Xte - mn) / denom
+            self.mn = mn
+            self.denom = denom
         elif self.scale == "min-max_fixed":
             # keep raw
             return
         else:
             raise ValueError
+
+    def inverse_transform(self, data):
+        start = 12
+        end = start + 2
+        if self.scale == "standard":
+            if hasattr(self, 'mu') and hasattr(self, 'sd'):
+                return data * self.sd[start:end] + self.mu[start:end]
+        elif self.scale == "min-max":
+            if hasattr(self, 'mn') and hasattr(self, 'denom'):
+                return data * self.denom[start:end] + self.mn[start:end]
+        return data
 
     def get_test_num_windows(self) -> int:
         return len(self._valid_starts.get("test", []))
@@ -447,10 +498,10 @@ class EVED(Dataset):
         计算每个有效窗口的统计量（可插拔）。
         - split: "train"/"val"/"test"
         - metrics: dict 名称->函数, 每个函数签名 (hist, fut, feat_names) -> number
-          hist: ndarray [seq_len, n_base_feats]
+          hist: ndarray [seq_len, n_var] (includes appended future known)
           fut:  ndarray [pred_len, n_base_feats]
           feat_names: list of base feature names (self.FEATURE_COLUMNS)
-        如果 metrics 为 None，则使用一组默认统计量（见下）。
+        如果 metrics 为 None，则使用一组基于分位数的默认规则（与常见场景匹配）
         返回 DataFrame，每行对应一个 start（列包含 "start" 与各统计量）。
         """
         assert split in ("train", "val", "test")
@@ -469,8 +520,8 @@ class EVED(Dataset):
             idx = lambda name: FC.index(name)
             i_speed = idx("Vehicle Speed[km/h]")
             i_speed_limit = idx("Speed Limit[km/h]")
-            i_grad = idx("Gradient Smoothed")
-            i_ele = idx("Elevation Smoothed[m]")
+            # i_grad = idx("Gradient Smoothed") # Used for history
+            # i_ele = idx("Elevation Smoothed[m]")
             i_inter = idx("Intersection")
             i_bus = idx("Bus Stops")
             i_focus = idx("Focus Points")
@@ -480,6 +531,15 @@ class EVED(Dataset):
             i_current = idx("HV Battery Current[A]")
             i_voltage = idx("HV Battery Voltage[V]")
             i_soc = idx("HV Battery SOC[%]")
+
+            # Indices for appended future known features (relative to base_n)
+            # Order in _future_known_names: Elevation, Gradient, Speed Limit, Intersection, Bus Stops, Focus Points
+            k_ele = 0
+            k_grad = 1
+            k_limit = 2
+            k_inter = 3
+            k_bus = 4
+            k_focus = 5
 
             def stop_ratio(hist, fut, feat_names):
                 return float(np.mean(hist[:, i_speed] < 5.0))
@@ -501,26 +561,32 @@ class EVED(Dataset):
                 return s
             def std_range(hist, fut, feat_names):
                 return float(np.nanpercentile(hist[:, i_speed], 90) - np.nanpercentile(hist[:, i_speed], 10))
+            
+            # Use appended future known features from hist (input) instead of fut (ground truth)
             def grad_mean_fut(hist, fut, feat_names):
-                return float(np.nanmean(fut[:, i_grad]))
+                g = hist[:, base_n + k_grad]
+                return float(np.nanmean(g))
             def ascent_fut(hist, fut, feat_names):
-                g = fut[:, i_grad]
+                g = hist[:, base_n + k_grad]
                 return float(np.sum(np.clip(g, 0.0, None)))
             def descent_fut(hist, fut, feat_names):
-                g = fut[:, i_grad]
+                g = hist[:, base_n + k_grad]
                 return float(np.sum(np.abs(np.clip(g, None, 0.0))))
             def ele_range_fut(hist, fut, feat_names):
-                return float(np.nanmax(fut[:, i_ele]) - np.nanmin(fut[:, i_ele]))
+                vals = hist[:, base_n + k_ele]
+                return float(np.nanmax(vals) - np.nanmin(vals))
             def inter_cnt(hist, fut, feat_names):
-                return int(np.nansum(fut[:, i_inter]))
+                return int(np.nansum(hist[:, base_n + k_inter]))
             def bus_cnt(hist, fut, feat_names):
-                return int(np.nansum(fut[:, i_bus]))
+                return int(np.nansum(hist[:, base_n + k_bus]))
             def focus_cnt(hist, fut, feat_names):
-                return int(np.nansum(fut[:, i_focus]))
+                return int(np.nansum(hist[:, base_n + k_focus]))
             def limit_std(hist, fut, feat_names):
-                return float(np.nanstd(fut[:, i_speed_limit]))
+                return float(np.nanstd(hist[:, base_n + k_limit]))
             def limit_changes(hist, fut, feat_names):
-                return int(np.sum(np.diff(fut[:, i_speed_limit]) != 0))
+                vals = hist[:, base_n + k_limit]
+                return int(np.sum(np.diff(vals) != 0))
+            
             def hvac_mean(hist, fut, feat_names):
                 return float(np.nanmean(hist[:, i_ac] + hist[:, i_heater]))
             def oat_mean(hist, fut, feat_names):
@@ -571,7 +637,9 @@ class EVED(Dataset):
             f1 = f0 + self.pred_len
             if f1 > data.shape[0]:
                 continue
-            hist = data[h0:h1, :base_n]
+            # hist includes appended columns (future known)
+            hist = data[h0:h1, :]
+            # fut is ground truth targets (base features)
             fut = data[f0:f1, :base_n]
             row = {"start": int(start)}
             for name, fn in metrics_map.items():
@@ -622,6 +690,7 @@ class EVED(Dataset):
 
         thr = thresholds or {}
         out = {}
+        computed_thresholds = {}
 
         # default classifier rules expressed as lambdas on df
         if classifiers is None:
@@ -636,18 +705,35 @@ class EVED(Dataset):
                 q_oat_low = df["OAT_mean"].quantile(1.0 - top_k_quantile)
             else:
                 q_oat_high = q_oat_low = 0.0
+            
+            # low load quantile
+            q_power_low = df["power_mean"].quantile(1.0 - top_k_quantile) if "power_mean" in df.columns else 0.0
+
+            # Save computed thresholds for reuse in testing
+            computed_thresholds = {
+                "uphill": float(thr.get("ascent_fut", q_up)),
+                "downhill": float(thr.get("descent_fut", q_down)),
+                "congested": float(thr.get("stop_ratio", q_stop)),
+                "facility_dense": float(thr.get("poi_density", q_poi)),
+                "speed_limit_switch": float(thr.get("limit_changes", 1.0)),
+                "high_hvac": float(thr.get("hvac_mean", q_hvac)),
+                "high_load": float(thr.get("power_mean", q_power)),
+                "low_load": float(thr.get("power_mean_low", q_power_low)),
+                "high_temp": float(thr.get("OAT_mean_high", q_oat_high)),
+                "low_temp": float(thr.get("OAT_mean_low", q_oat_low)),
+            }
 
             classifiers = {
-                "uphill": lambda d: d["ascent_fut"] >= thr.get("ascent_fut", q_up),
-                "downhill": lambda d: d["descent_fut"] >= thr.get("descent_fut", q_down),
-                "congested": lambda d: d["stop_ratio"] >= thr.get("stop_ratio", q_stop),
-                "facility_dense": lambda d: d["poi_density"] >= thr.get("poi_density", q_poi),
-                "speed_limit_switch": lambda d: d["limit_changes"] >= thr.get("limit_changes", 1),
-                "high_hvac": lambda d: d["hvac_mean"] >= thr.get("hvac_mean", q_hvac),
-                "high_load": lambda d: d["power_mean"] >= thr.get("power_mean", q_power),
-                "low_load": lambda d: d["power_mean"] <= thr.get("power_mean", d["power_mean"].quantile(0.1) if "power_mean" in d else 0.0),
-                "high_temp": lambda d: ("OAT_mean" in d.columns) and (d["OAT_mean"] >= thr.get("OAT_mean_high", q_oat_high)),
-                "low_temp":  lambda d: ("OAT_mean" in d.columns) and (d["OAT_mean"] <= thr.get("OAT_mean_low", q_oat_low)),
+                "uphill": lambda d: d["ascent_fut"] >= computed_thresholds["uphill"],
+                "downhill": lambda d: d["descent_fut"] >= computed_thresholds["downhill"],
+                "congested": lambda d: d["stop_ratio"] >= computed_thresholds["congested"],
+                "facility_dense": lambda d: d["poi_density"] >= computed_thresholds["facility_dense"],
+                "speed_limit_switch": lambda d: d["limit_changes"] >= computed_thresholds["speed_limit_switch"],
+                "high_hvac": lambda d: d["hvac_mean"] >= computed_thresholds["high_hvac"],
+                "high_load": lambda d: d["power_mean"] >= computed_thresholds["high_load"],
+                "low_load": lambda d: d["power_mean"] <= computed_thresholds["low_load"],
+                "high_temp": lambda d: ("OAT_mean" in d.columns) and (d["OAT_mean"] >= computed_thresholds["high_temp"]),
+                "low_temp":  lambda d: ("OAT_mean" in d.columns) and (d["OAT_mean"] <= computed_thresholds["low_temp"]),
             }
 
         # apply classifiers
@@ -671,12 +757,25 @@ class EVED(Dataset):
                 out[name] = []
         # cache results and metadata
         self._subsets_cache[split] = dict(out)
-        self._subsets_meta[split] = {"thresholds": thr, "top_k": top_k_quantile}
+        self._subsets_meta[split] = {"thresholds": thr, "top_k": top_k_quantile, "computed_thresholds": computed_thresholds}
         # optional persistence
         if save and persist_path is not None:
             print("saving subsets to", persist_path)
             self.save_subsets(persist_path, split=split, overwrite=overwrite)
+            # Also save thresholds if we computed them
+            if computed_thresholds:
+                thr_path = str(Path(persist_path).parent / f"s_{self.seq_len}_p_{self.pred_len}_thresholds_v9.json")
+                self.save_thresholds(thr_path, computed_thresholds)
         return out
+
+    def save_thresholds(self, path, thresholds):
+        """Save computed thresholds to JSON."""
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(thresholds, f, indent=2)
+            print(f"Saved thresholds to {path}")
+        except Exception as e:
+            print(f"Failed to save thresholds: {e}")
 
     def save_subsets(self, path, split=None, overwrite=False):
         """

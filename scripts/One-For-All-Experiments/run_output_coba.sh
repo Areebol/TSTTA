@@ -1,6 +1,7 @@
 #!/bin/bash
 
-GPUS=(0 1 2 3 4 5 6 7)
+# GPUS=(0 1 2 3 4 5 6 7)
+GPUS=(7)
 NGPU=${#GPUS[@]}
 GPU_STR="${GPUS[*]}"
 export GPU_STR
@@ -13,8 +14,8 @@ PRED_LENS=(96 192 336 720)
 
 # MODELS=("OLS")
 MODELS=("DLinear")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 # DATASETS=("ETTh2" "ETTm1" "ETTm2" "weather")
 # DATASETS=("weather")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
@@ -52,7 +53,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.PETSA_LOWRANK 16 \
         TTA.DUAL.CALI_NAME coba-GCM \
         TTA.DUAL.LOSS_NAME COBA \
-        TTA.DUAL.COBA_ONLINE_ENABLED False \
+        TTA.DUAL.COBA_ONLINE_ENABLED True \
         TTA.DUAL.COBA_ONLINE_LR 1e-3 \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \

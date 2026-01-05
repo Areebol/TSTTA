@@ -36,6 +36,11 @@ _C.DATA.TARGET_START_IDX = 0
 _C.DATA.PERIOD_LEN = 24  # Used only when SAN is ENABLED
 _C.DATA.STATION_TYPE = 'adaptive'  # Used only when SAN is ENABLED
 
+# EVED specific
+_C.DATA.TRAIN_VEHICLE_IDS = []
+_C.DATA.VAL_VEHICLE_IDS = []
+_C.DATA.TEST_VEHICLE_IDS = []
+_C.DATA.MIN_TEST_LEN = 300
 
 _C.DATA.TYPE = None # 'noise, 'regime', 'season', 'trend', 'None'
 _C.DATA.PERTURB_ROOT = '/lichenghao/dengzeshuai/codes/TSF/TSTTA/TTFBench/synthetic_series_single_mode'
@@ -271,6 +276,7 @@ _C.TTA.DUAL.GCM_N_BASES = 16
 _C.TTA.DUAL.COBA_ONLINE_ENABLED = False
 _C.TTA.DUAL.COBA_ONLINE_LR = 1e-3
 _C.TTA.DUAL.PRETRAIN_EPOCHS = 5
+_C.TTA.DUAL.GCM_FEA_DIM = 32
 
 _C.MODEL = CN()
 _C.MODEL.NAME = 'iTransformer'
