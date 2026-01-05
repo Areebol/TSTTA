@@ -52,6 +52,8 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.PETSA_LOWRANK 16 \
         TTA.DUAL.CALI_NAME coba-GCM \
         TTA.DUAL.LOSS_NAME COBA \
+        TTA.DUAL.COBA_ONLINE_ENABLED False \
+        TTA.DUAL.COBA_ONLINE_LR 1e-3 \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
         TTA.DUAL.GCM_N_BASES 6 \

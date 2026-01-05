@@ -448,7 +448,11 @@ class Adapter(nn.Module):
             parts.append("in")
         if output_enable:
             parts.append("out")
-
+        if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-online")
+        else:
+            parts.append("coba-offline")
+            
         self.save_name = "-".join(parts)
         self.mse_all = []
         self.mae_all = []
@@ -461,13 +465,13 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
         self._pretrain_adapter()
-        # self.cali.out_cali.online_mode = True # Enable online mode after pre-training
+        self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
         print("Adapter pre-training completed.")
         optim_params = self.cali.out_cali.get_optim_params()
         self.optimizer = torch.optim.Adam(
             optim_params,
-            lr=1e-3,
+            lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
             weight_decay=cfg.SOLVER.WEIGHT_DECAY
         ) 
         
