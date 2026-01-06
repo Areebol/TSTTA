@@ -233,7 +233,7 @@ class CoBA_GCM(nn.Module):
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            print("Using online mode in CoBA_GCM.")
+            # print("Using online mode in CoBA_GCM.")
             out = x + torch.tanh(self.gating) * feat_trans + tafas_output
         else:
             # 加上 Residual 和 Gating

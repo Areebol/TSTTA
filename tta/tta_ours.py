@@ -604,6 +604,11 @@ class Adapter(nn.Module):
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
         )
+        
+        import wandb
+        if wandb.run is not None:
+            wandb.log({"tta/mse": self.mse_all.mean(), "tta/mae": self.mae_all.mean()})
+            
         full_data = self.data_manager.get_full_data()
         # if full_data:
         #     self.visualizer.plot_all(full_data)
