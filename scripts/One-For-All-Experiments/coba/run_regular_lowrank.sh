@@ -12,7 +12,7 @@ PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
 DATASETS=("ETTh1")
-PRED_LENS=(96)
+PRED_LENS=(336)
 
 SEED=1
 BASE_LR=0.001
@@ -37,14 +37,15 @@ for MODEL in "${MODELS[@]}"; do
             TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
             TTA.DUAL.GATING_INIT ${GATING_INIT} \
             TTA.DUAL.PETSA_LOWRANK 16 \
-            TTA.DUAL.CALI_NAME coba-GCM \
-            TTA.DUAL.LOSS_NAME COBA \
+            TTA.DUAL.CALI_NAME lowrank-coba-GCM \
+            TTA.DUAL.LOSS_NAME LOWRANK-COBA \
             TTA.DUAL.CALI_INPUT_ENABLE False \
             TTA.DUAL.CALI_OUTPUT_ENABLE True \
             TTA.DUAL.ADJUST_PRED True \
             RESULT_DIR ${RESULT_DIR} \
             TTA.SOLVER.BASE_LR 1e-3 \
             TTA.DUAL.GCM_N_BASES 6 \
+            TTA.DUAL.LOWRANK_RANKS 8 \
             TTA.DUAL.COBA_ONLINE_ENABLED False \
             TTA.DUAL.COBA_ONLINE_LR 1e-3 \
             TTA.DUAL.PRETRAIN_EPOCHS 4 \
