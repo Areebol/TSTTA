@@ -3,8 +3,10 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 # PRED_LENS=(96 192 336 720)
 # DATASETS=("weather")
+MODELS=("DLinear")
 DATASETS=("ETTh1")
-PRED_LENS=(96 192 336 720)
+# PRED_LENS=(96 192 336 720)
+PRED_LENS=(96)
 for NAME in "${MODELS[@]}"; do
     for DATASET in "${DATASETS[@]}"; do
         for PRED_LEN in "${PRED_LENS[@]}"; do

@@ -17,6 +17,7 @@ from utils.misc import prepare_inputs
 from config import get_norm_method
 import math
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 class CorrCoefLoss(nn.Module):
 
@@ -62,7 +63,7 @@ class Adapter(nn.Module):
             self.test_loader = get_test_dataloader(cfg)
 
         if self.cfg.TTA.PETSA.CALI_MODULE:
-            self.cali = Calibration(cfg).cuda()
+            self.cali = Calibration(cfg).to(global_device)
         else:
             self.cali = None
         

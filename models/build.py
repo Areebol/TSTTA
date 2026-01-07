@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 
 from models import Autoformer, iTransformer, DLinear, PatchTST, FreTS, MICN, Pyraformer, TimesNet, OLS, Koopa, KNF, LSTM
+from device_manager import global_device
 
 
 def build_model(cfg):
@@ -14,8 +15,7 @@ def build_model(cfg):
     else:
         model = model_class(cfg.MODEL)
 
-    if torch.cuda.is_available():
-        model = model.cuda()
+    model = model.to(global_device)
 
     return model
 
@@ -35,7 +35,7 @@ def build_norm_module(cfg):
         raise ValueError
 
     if torch.cuda.is_available():
-        norm_module = norm_module.cuda()
+        norm_module = norm_module.to(global_device)
 
     return norm_module
 
@@ -76,5 +76,5 @@ def build_vae_model(cfg):
     from models.VAE import VAE
     model = VAE(cfg)
     if torch.cuda.is_available():
-        model = model.cuda()
+        model = model.to(global_device)
     return model

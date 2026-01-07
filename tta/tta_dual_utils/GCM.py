@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from utils.misc import prepare_inputs
 import math
+from device_manager import global_device
 
 class tafas_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True):
@@ -109,7 +110,7 @@ class CoBA_GCM(nn.Module):
     def _get_query(self, x):
         batch_size = x.shape[0]
         
-        x_fft = torch.fft.rfft(x, dim=1)
+        x_fft = torch.fft.rfft(x, dim=1).to(x.dtype)
         
         x_mag = x_fft.abs()
         
@@ -208,7 +209,6 @@ class CoBA_low_rank_GCM(nn.Module):
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
-        
         x_mag = x_fft.abs()
         
         x_feat = x_mag.reshape(batch_size, -1)
@@ -415,7 +415,7 @@ class CoBA_Analyzer:
             
         input_tensor = torch.tensor(np.array(inputs), dtype=torch.float32) # (B, L, V)
         if next(self.model.parameters()).is_cuda:
-            input_tensor = input_tensor.cuda()
+            input_tensor = input_tensor.to(global_device)
 
         # 3. 推理 (分批处理以防显存溢出)
         batch_size = 256

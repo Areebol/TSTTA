@@ -3,6 +3,7 @@ import torch.nn as nn
 from layers.Embed import DataEmbedding
 from layers.Autoformer_EncDec import series_decomp, series_decomp_multi
 import torch.nn.functional as F
+from device_manager import global_device
 
 
 class MIC(nn.Module):
@@ -11,7 +12,7 @@ class MIC(nn.Module):
     """
 
     def __init__(self, feature_size=512, n_heads=8, dropout=0.05, decomp_kernel=[32], conv_kernel=[24],
-                 isometric_kernel=[18, 6], device='cuda'):
+                 isometric_kernel=[18, 6], device=global_device):
         super(MIC, self).__init__()
         self.conv_kernel = conv_kernel
         self.device = device
@@ -88,7 +89,7 @@ class MIC(nn.Module):
 
 class SeasonalPrediction(nn.Module):
     def __init__(self, embedding_size=512, n_heads=8, dropout=0.05, d_layers=1, decomp_kernel=[32], c_out=1,
-                 conv_kernel=[2, 4], isometric_kernel=[18, 6], device='cuda'):
+                 conv_kernel=[2, 4], isometric_kernel=[18, 6], device=global_device):
         super(SeasonalPrediction, self).__init__()
 
         self.mic = nn.ModuleList([MIC(feature_size=embedding_size, n_heads=n_heads,

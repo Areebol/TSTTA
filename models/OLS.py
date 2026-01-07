@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.linear_model import Ridge
 
 from utils.misc import prepare_inputs
+from device_manager import global_device
 
 
 class Model(nn.Module):
@@ -101,7 +102,7 @@ class Model(nn.Module):
             U, S, V = torch.svd(enc_windows)
             S_diag = torch.diag(S)
             
-            S_inv = torch.inverse(S_diag**2 + self.alpha * torch.eye(S_diag.shape[0]).cuda())
+            S_inv = torch.inverse(S_diag**2 + self.alpha * torch.eye(S_diag.shape[0]).to(global_device))
             self.linear.weight.data = (V @ S_inv @ (S_diag @ U.t() @ dec_windows)).t()
     
     

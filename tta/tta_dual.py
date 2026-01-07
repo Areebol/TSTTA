@@ -18,6 +18,7 @@ from tta.loss import *
 from tta.tta_dual_utils.GCM import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
@@ -91,7 +92,7 @@ class Adapter(nn.Module):
         self.model = model
         self.norm_method = get_norm_method(cfg)
         self.norm_module = norm_module
-        self.cali = build_calibration_module(cfg).cuda()
+        self.cali = build_calibration_module(cfg).to(global_device)
         self.loss_fn = build_loss_fn(cfg)
 
         self.manager = TTAModelManager(model, norm_module, self.cali)

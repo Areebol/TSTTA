@@ -13,6 +13,7 @@ from utils.misc import prepare_inputs
 from utils.misc import mkdir
 from config import get_norm_method
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 class Predictor:
     def __init__(self, cfg, model, norm_module: Optional[torch.nn.Module] = None):
@@ -86,7 +87,7 @@ class Predictor:
             # ground_truth = dec_window[:, -self.cfg.DATA.PRED_LEN:, self.cfg.DATA.TARGET_START_IDX:].float()
             ground_truth = dec_window[:, -self.cfg.DATA.PRED_LEN:, target_start:target_end].float()
             dec_zeros = torch.zeros_like(dec_window[:, -self.cfg.DATA.PRED_LEN:, :]).float()
-            dec_window = torch.cat([dec_window[:, :self.cfg.DATA.LABEL_LEN:, :], dec_zeros], dim=1).float().cuda()
+            dec_window = torch.cat([dec_window[:, :self.cfg.DATA.LABEL_LEN:, :], dec_zeros], dim=1).float().to(global_device)
             
             model_cfg = self.cfg.MODEL
             pred = self.model(enc_window, enc_window_stamp, dec_window, dec_window_stamp)

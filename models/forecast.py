@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from config import get_norm_method
 from utils.misc import prepare_inputs
+from device_manager import global_device
 
 
 def forecast(
@@ -34,7 +35,7 @@ def forecast(
 
     # Prepare decoder input (label_len original + zeros for pred horizon)
     dec_zeros = torch.zeros_like(dec_window[:, -cfg.DATA.PRED_LEN:, :]).float()
-    dec_window = torch.cat([dec_window[:, :cfg.DATA.LABEL_LEN, :], dec_zeros], dim=1).float().cuda()
+    dec_window = torch.cat([dec_window[:, :cfg.DATA.LABEL_LEN, :], dec_zeros], dim=1).float().to(global_device)
     
     model_cfg = cfg.MODEL
     if model_cfg.output_attention:

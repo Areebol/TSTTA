@@ -14,6 +14,7 @@ from utils.misc import prepare_inputs
 from config import get_norm_method
 import time
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 class SimpleOutputAdapter(nn.Module):
     def __init__(self, pred_len: int, buffer_context_size: int = 5, n_vars: int = 1, 
@@ -172,7 +173,7 @@ class SimpleAdapter(nn.Module):
             num_layers=self.adapter_layers,
             hidden_dim=self.hidden_dim,
             only_context=cfg.TTA.SIMPLE.ONLY_CONTEXT,
-        ).cuda()
+        ).to(global_device)
         
         self.adapters_enabled = False
         self.step_count = 0
@@ -321,7 +322,7 @@ class SimpleAdapter(nn.Module):
     def _get_individual_context_for_batch(self, batch_size, current_batch_idx):
 
         if len(self.sample_history) == 0:
-            return torch.zeros(batch_size, self.buffer_context_size, device='cuda')
+            return torch.zeros(batch_size, self.buffer_context_size, device=global_device)
         
         history_size = min(self.buffer_context_size, len(self.sample_history))
         context_values = [self.sample_history[-(i+1)]['target_mean'] 
@@ -331,7 +332,7 @@ class SimpleAdapter(nn.Module):
             last_val = context_values[-1] if context_values else 0.0
             context_values.extend([last_val] * (self.buffer_context_size - len(context_values)))
         
-        context_tensor = torch.tensor(context_values, dtype=torch.float32, device='cuda')
+        context_tensor = torch.tensor(context_values, dtype=torch.float32, device=global_device)
         return context_tensor.unsqueeze(0).expand(batch_size, -1) 
     
     def _adaptive_learning_rate(self, current_loss: float, step: int, batch_idx: int = 0) -> float:

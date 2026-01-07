@@ -14,6 +14,7 @@ from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 
 class Adapter(nn.Module):
@@ -31,7 +32,7 @@ class Adapter(nn.Module):
         self.test_data = self.test_loader.dataset.test
 
         if self.cfg.TTA.TAFAS.CALI_MODULE:
-            self.cali = Calibration(cfg).cuda()
+            self.cali = Calibration(cfg).to(global_device)
         
         self._freeze_all_model_params()
         self.named_modules_to_adapt = self._get_named_modules_to_adapt()

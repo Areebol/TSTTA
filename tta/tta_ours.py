@@ -21,6 +21,7 @@ from tta.utils import save_tta_results
 from tta.visualizer import TTAVisualizer
 import os
 import matplotlib.pyplot as plt
+from device_manager import global_device
 
 class TTADataManager:
     def __init__(self, cfg, enabled=True):
@@ -416,7 +417,7 @@ class Adapter(nn.Module):
         self.model = model
         self.norm_method = get_norm_method(cfg)
         self.norm_module = norm_module
-        self.cali = build_calibration_module(cfg).cuda()
+        self.cali = build_calibration_module(cfg).to(global_device)
         self.loss_fn = build_loss_fn(cfg)
 
         self.manager = TTAModelManager(model, norm_module, self.cali)
@@ -527,7 +528,7 @@ class Adapter(nn.Module):
         self.manager.eval()   
     
     def _calculate_period_and_batch_size(self, enc_window_first):
-        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
+        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0).to(enc_window_first.dtype)
         amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
         try:
