@@ -47,6 +47,13 @@ class CorrCoefLoss(nn.Module):
         return -corr_xy
 
 
+def huber_loss(input, target, delta=0.5):
+    abs_diff = torch.abs(input - target)
+    quadratic = torch.clamp(abs_diff, max=delta)
+    linear = abs_diff - quadratic
+    loss = 0.5 * quadratic ** 2 + delta * linear
+    return loss.mean()
+
 class Adapter(nn.Module):
     def __init__(self, cfg, model: nn.Module, norm_module=None):
         super(Adapter, self).__init__()
@@ -268,7 +275,10 @@ class Adapter(nn.Module):
     
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
-        amplitude = torch.abs(fft_result)
+        if global_device == torch.device('npu'):
+            amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+        else:
+            amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
         try:
             period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
@@ -292,9 +302,14 @@ class Adapter(nn.Module):
 
                 if self.cfg.TTA.PETSA.CALI_MODULE:
                     pred = self.cali.output_calibration(pred)
-                
-                loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
-                loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
+
+                if global_device == torch.device('npu'):
+                    loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
+                    loss_feq = torch.sqrt(loss_feq.real.pow(2) + loss_feq.imag.pow(2)).mean()
+                    loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
+                else:
+                    loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
+                    loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
                 loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA
 
                 coss = self.person_cor(pred, ground_truth)
@@ -327,8 +342,13 @@ class Adapter(nn.Module):
         if self.cfg.TTA.PETSA.CALI_MODULE:
             pred = self.cali.output_calibration(pred)
 
-        loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1)).abs().mean() 
-        loss_tmp = torch.nn.functional.huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
+        if global_device == torch.device('npu'):
+            loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1))
+            loss_feq = torch.sqrt(loss_feq.real.pow(2) + loss_feq.imag.pow(2)).mean()
+            loss_tmp = huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
+        else:
+            loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1)).abs().mean() 
+            loss_tmp = torch.nn.functional.huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
 
         loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA
         coss = self.person_cor(pred[0][:period], ground_truth[0][:period])

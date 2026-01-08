@@ -59,6 +59,8 @@ def main():
             adapter = cosa.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Ours":
             adapter = build_tta_runner(cfg, model)
+        elif cfg.TTA.METHOD == "Ours":
+            adapter = tta_out.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Dual-tta":
             adapter = tta_dual.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Ours-tta":
