@@ -21,6 +21,7 @@ from tta.utils import save_tta_results
 from tta.visualizer import TTAVisualizer
 import os
 import matplotlib.pyplot as plt
+from device_manager import global_device
 
 class TTADataManager:
     def __init__(self, cfg, enabled=True):
@@ -357,12 +358,19 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'tafas-GCM': tafas_GCM,
         'petsa-GCM': petsa_GCM,
         'coba-GCM': CoBA_GCM,
+        'lowrank-coba-GCM': CoBA_low_rank_GCM,
         'identity': IdentityAdapter,
     }
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'feature_dim': cfg.TTA.DUAL.GCM_FEA_DIM,
+        }
+        params.update(coba_params)
+    elif model_type == 'lowrank-coba-GCM':
+        coba_params = {
+            'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
+            'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
         }
         params.update(coba_params)
     elif model_type == 'identity':
@@ -390,6 +398,8 @@ def build_loss_fn(cfg) -> nn.Module:
         return PETSALoss(alpha=alpha)
     elif loss_name == "COBA":
         return CoBA_Loss(lambda_ortho=0.01)
+    elif loss_name == "LOWRANK-COBA":
+        return LowRankCoBALoss(lambda_ortho=0.01)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -408,7 +418,7 @@ class Adapter(nn.Module):
         self.model = model
         self.norm_method = get_norm_method(cfg)
         self.norm_module = norm_module
-        self.cali = build_calibration_module(cfg).cuda()
+        self.cali = build_calibration_module(cfg).to(global_device)
         self.loss_fn = build_loss_fn(cfg)
 
         self.manager = TTAModelManager(model, norm_module, self.cali)
@@ -496,6 +506,8 @@ class Adapter(nn.Module):
                     pred = self.cali.output_calibration(pred)
                 if isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                elif isinstance(self.loss_fn, LowRankCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
                 self.optimizer.zero_grad()
@@ -504,7 +516,7 @@ class Adapter(nn.Module):
                 self.cali.out_cali.analyzer.record_batch()
             self.cali.out_cali.analyzer.end_epoch()
         self._switch_model_to_eval()
-        visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
+        # visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
 
     def _reset(self):
         self.manager.reset()
@@ -517,7 +529,7 @@ class Adapter(nn.Module):
         self.manager.eval()   
     
     def _calculate_period_and_batch_size(self, enc_window_first):
-        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
+        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0).to(enc_window_first.dtype)
         amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
         try:
@@ -546,6 +558,8 @@ class Adapter(nn.Module):
                     
                 if isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                elif isinstance(self.loss_fn, LowRankCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
 
@@ -570,6 +584,8 @@ class Adapter(nn.Module):
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
             if isinstance(self.loss_fn, CoBA_Loss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
+            elif isinstance(self.loss_fn, LowRankCoBALoss):
+                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
             self.optimizer.zero_grad()
@@ -605,12 +621,17 @@ class Adapter(nn.Module):
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
         )
+        
+        import wandb
+        if wandb.run is not None:
+            wandb.log({"tta/mse": self.mse_all.mean(), "tta/mae": self.mae_all.mean()})
+            
         full_data = self.data_manager.get_full_data()
         # if full_data:
         #     self.visualizer.plot_all(full_data)
         self.model.eval()
-        self.cali.out_cali.analyzer.plot_stats()
-        self.cali.out_cali.analyzer.plot_evolution()
+        # self.cali.out_cali.analyzer.plot_stats()
+        # self.cali.out_cali.analyzer.plot_evolution()
         print("Final TTA Results:")
         print(f"MSE mean: {self.mse_all.mean()}")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
@@ -857,4 +878,4 @@ def visualize_bases_interpretation(model, window_len, var_idx=0):
     plt.tight_layout()
     plt.subplots_adjust(top=0.92) # 留出标题空间
     plt.savefig("coba_bases_multi_view.png", dpi=300)
-    plt.show()
+    # plt.show()

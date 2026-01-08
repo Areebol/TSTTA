@@ -17,7 +17,7 @@ def construct_loader(cfg, split, batch_size=None):
         shuffle = cfg.TEST.SHUFFLE
         drop_last = cfg.TEST.DROP_LAST
     elif split == "tta_train":
-        batch_size = cfg.TEST.BATCH_SIZE if batch_size is None else batch_size
+        batch_size = cfg.TRAIN.BATCH_SIZE if batch_size is None else batch_size
         shuffle = cfg.TEST.SHUFFLE
         drop_last = cfg.TEST.DROP_LAST
         split = "train"

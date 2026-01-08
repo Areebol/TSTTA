@@ -12,11 +12,12 @@ import torch.nn.functional as F
 import numpy as np
 from models.optimizer import get_optimizer
 from models.forecast import forecast
-from datasets.loader import get_test_dataloader
+from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
 import math
 from tta.utils import save_tta_results
+from device_manager import global_device
 
 class CorrCoefLoss(nn.Module):
 
@@ -56,11 +57,13 @@ class Adapter(nn.Module):
         self.norm_module = norm_module
 
         # 使用当前 cfg 构建一个“默认” test_loader（此时 TEST.BATCH_SIZE 还是 config 里的值）
-        self.test_loader = get_test_dataloader(cfg)
-        self.test_data = self.test_loader.dataset.test
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
 
         if self.cfg.TTA.PETSA.CALI_MODULE:
-            self.cali = Calibration(cfg).cuda()
+            self.cali = Calibration(cfg).to(global_device)
         else:
             self.cali = None
         
@@ -79,8 +82,12 @@ class Adapter(nn.Module):
             self.cali_state = None
 
         # 在 PETSA 内部用一个“大 batch”的 test_loader，不污染 cfg
+        self.test_data = self.test_loader.dataset.test
         tta_batch_size = len(self.test_loader.dataset)
-        self.test_loader = get_test_dataloader(cfg, batch_size=tta_batch_size)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg, batch_size=tta_batch_size)
+        else:
+            self.test_loader = get_test_dataloader(cfg, batch_size=tta_batch_size)
 
         self.cur_step = cfg.DATA.SEQ_LEN - 2
         self.pred_step_end_dict = {}
@@ -247,11 +254,12 @@ class Adapter(nn.Module):
         print('After TSF-TTA of PETSA')
         print(f'Number of adaptations: {self.n_adapt}')
         print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"        
         save_tta_results(
             tta_method='PETSA',
             seed=self.cfg.SEED,
             model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
+            dataset_name=dataset_name,
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),

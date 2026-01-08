@@ -13,13 +13,13 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 # MODELS=("OLS")
-MODELS=("DLinear")
+# MODELS=("DLinear")
 DATASETS=("ETTh1")
 TARGETS=("ETTh2")
 # DATASETS=("ETTh2" "ETTm1" "ETTm2" "weather")
 # DATASETS=("weather")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2")
-PRED_LENS=(96)
+# PRED_LENS=(96)
 # PRED_LENS=(720)
 
 parallel --lb -j ${TOTAL_JOBS} '
@@ -57,9 +57,10 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.COBA_ONLINE_LR 1e-3 \
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
-        TTA.DUAL.GCM_N_BASES 6 \
+        TTA.DUAL.GCM_N_BASES 10 \
         TTA.DUAL.PRETRAIN_EPOCHS 5 \
         TTA.DUAL.ADJUST_PRED True \
+        TRAIN.BATCH_SIZE 32 \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD Ours-tta
         

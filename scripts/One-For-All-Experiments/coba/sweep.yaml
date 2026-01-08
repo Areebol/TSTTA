@@ -1,0 +1,26 @@
+program: sweep_proxy.py 
+method: grid
+metric:
+  name: tta/mse
+  goal: minimize
+
+parameters:
+  online_lr:
+    values: [1e-2, 1e-3, 1e-4, 1e-5]
+  gcm_n_bases:
+    values: [2, 6, 10]
+  
+  base_lr:
+    values: [1e-2, 1e-3, 1e-4, 1e-5]
+
+  pretrain_epochs:
+    values: [1, 4]
+
+  batch_size:
+    values: [64, 256, 512]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args}  

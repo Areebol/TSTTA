@@ -1,3 +1,4 @@
+from device_manager import global_device
 import os
 from models.build import build_model, load_best_model, build_norm_module
 from utils.parser import parse_args, load_config
@@ -22,9 +23,6 @@ def main():
         cfg.DATA.TYPE = None
     update_cfg_from_dataset(cfg, cfg.DATA.NAME)
     
-    # select cuda devices
-    set_devices(cfg.VISIBLE_DEVICES)
-
     # set wandb logger
     if cfg.WANDB.ENABLE:
         init_wandb(cfg)

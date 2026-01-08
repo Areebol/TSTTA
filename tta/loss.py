@@ -40,7 +40,7 @@ class PETSALoss(nn.Module):
         self.person_cor = CorrCoefLoss()
         
     def forward(self, pred, ground_truth):
-        loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
+        loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).to(pred.dtype).abs().mean() 
         loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
         loss =  loss_tmp + loss_feq * self.alpha
         coss = self.person_cor(pred, ground_truth)
@@ -80,7 +80,42 @@ class OrthoLoss(nn.Module):
         # 这意味着：对自己相似度为1，对别人相似度为0 (正交)
         return F.mse_loss(gram_matrix, identity)
 
+class LowRankOrthoLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
+    def forward(self, bases_left, bases_right):
+        """
+        bases_left:  (N, L, R, V)
+        bases_right: (N, R, L, V)
+        """
+        N, L, R, V = bases_left.shape
+        
+        # 1. 计算所有对之间的内积矩阵 (Gram Matrix)
+        # 我们需要计算 G[i, j] = sum_v (Tr( (Ui,v^T Uj,v) * (Vj,v Vi,v^T) ))
+        
+        # 计算 U_inner: (N, N, R, R, V)
+        # U_inner[i,j] = Ui^T * Uj
+        U_inner = torch.einsum('ilrv, jlrv -> ijrv', bases_left, bases_left) 
+        
+        # 计算 V_inner: (N, N, R, R, V)
+        # V_inner[i,j] = Vj * Vi^T
+        V_inner = torch.einsum('irlv, jrlv -> ijrv', bases_right, bases_right)
+        
+        # 计算 Gram 矩阵: 两个 (R,R) 矩阵点乘并求和
+        # shape: (N, N)
+        gram_matrix = torch.einsum('ijrv, ijrv -> ij', U_inner, V_inner)
+        
+        # 2. 归一化 (让 Diagonal 变为 1)
+        # 这里的 gram_matrix[i,i] 就是第 i 个基的 L2 范数的平方
+        diag = torch.diag(gram_matrix).unsqueeze(0)
+        norm_matrix = torch.sqrt(torch.matmul(diag.T, diag) + 1e-8)
+        gram_matrix_norm = gram_matrix / norm_matrix
+        
+        # 3. 目标是单位矩阵
+        identity = torch.eye(N, device=bases_left.device)
+        return F.mse_loss(gram_matrix_norm, identity)
+    
 class CoBA_Loss(nn.Module):
     def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
         super().__init__()
@@ -106,11 +141,35 @@ class CoBA_Loss(nn.Module):
         # 2. 正交 Loss
         l_ortho = self.ortho_loss_fn(bases)
         
-        # 3. 稀疏 Loss
-        # l_sparse = self.sparse_loss_fn(coeffs)
+        l_total = l_task + (self.lambda_ortho * l_ortho)
         
-        # 总 Loss
-        # l_total = l_task + (self.lambda_ortho * l_ortho) + (self.lambda_sparse * l_sparse)
+        return l_total
+    
+class LowRankCoBALoss(nn.Module):
+    def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
+        super().__init__()
+        self.task_loss_fn = PETSALoss(alpha=0.1)
+        self.ortho_loss_fn = LowRankOrthoLoss()
+        # self.sparse_loss_fn = SparsityLoss()
+        
+        self.lambda_ortho = lambda_ortho
+        self.lambda_sparse = lambda_sparse
+ 
+    def forward(self, pred, ground_truth, bases_left, bases_right, coeffs=None):
+        """
+        需要传入四个参数:
+        1. pred: 模型的预测输出
+        2. ground_truth: 真实标签
+        3. coeffs: 模型 forward 产生的混合系数 (用于稀疏 Loss)
+        4. bases: 模型的基向量参数 (用于正交 Loss)
+        """
+        
+        # 1. 任务 Loss (MSE + ...)
+        l_task = self.task_loss_fn(pred, ground_truth)
+        
+        # 2. 正交 Loss
+        l_ortho = self.ortho_loss_fn(bases_left, bases_right)
+        
         l_total = l_task + (self.lambda_ortho * l_ortho)
         
         return l_total

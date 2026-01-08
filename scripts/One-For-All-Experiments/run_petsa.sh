@@ -2,14 +2,16 @@
 GPUS=(0 5 6 7)
 NUM_GPUS=${#GPUS[@]}
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("iTransformer" "MICN" "OLS" "PatchTST")
+# MODELS=("iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh2")
 PRED_LENS=(96)
 PRED_LENS=(96 192 336 720)
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 
-parallel -j 16 --delay 0 '
+parallel -j 8 --delay 0 '
     GPU=0
     SEED=0
     RESULT_DIR="./results/PETSA/"
@@ -24,6 +26,7 @@ parallel -j 16 --delay 0 '
     CUDA_VISIBLE_DEVICES=$GPU python main.py \
         SEED ${SEED} \
         DATA.NAME {2} \
+        DATA.DOMAIN_SHIFT_TARGET {4} \
         DATA.PRED_LEN {3} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
@@ -31,6 +34,7 @@ parallel -j 16 --delay 0 '
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE False \
         TTA.ENABLE True \
+        TTA.DOMAIN_SHIFT True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.PETSA.GATING_INIT ${GATING_INIT} \
@@ -39,4 +43,4 @@ parallel -j 16 --delay 0 '
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD PETSA
         
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"
