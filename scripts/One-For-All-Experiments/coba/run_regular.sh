@@ -10,7 +10,7 @@ TOTAL_JOBS=$((NGPU * JOBS_PER_GPU))
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 # PRED_LENS=(96 192 336 720)
 
-MODELS=("DLinear")
+MODELS=("OLS")
 DATASETS=("ETTh1")
 PRED_LENS=(96)
 
@@ -45,9 +45,9 @@ for MODEL in "${MODELS[@]}"; do
             RESULT_DIR ${RESULT_DIR} \
             TTA.SOLVER.BASE_LR 1e-3 \
             TTA.DUAL.GCM_N_BASES 6 \
-            TTA.DUAL.COBA_ONLINE_ENABLED False \
-            TTA.DUAL.COBA_ONLINE_LR 1e-3 \
-            TTA.DUAL.PRETRAIN_EPOCHS 4 \
+            TTA.DUAL.COBA_ONLINE_ENABLED True \
+            TTA.DUAL.COBA_ONLINE_LR 1e-4 \
+            TTA.DUAL.PRETRAIN_EPOCHS 6 \
             TRAIN.BATCH_SIZE 512 \
             TTA.METHOD Ours-tta
 done
