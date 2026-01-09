@@ -40,7 +40,9 @@ class PETSALoss(nn.Module):
         self.person_cor = CorrCoefLoss()
         
     def forward(self, pred, ground_truth):
-        loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).to(pred.dtype).abs().mean() 
+        # loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).to(pred.dtype).abs().mean() 
+        freq_temp = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
+        loss_feq = torch.sqrt(freq_temp.real.pow(2) + freq_temp.imag.pow(2)).mean() 
         loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
         loss =  loss_tmp + loss_feq * self.alpha
         coss = self.person_cor(pred, ground_truth)
