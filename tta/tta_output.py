@@ -13,6 +13,7 @@ from tta.gating import *
 from tta.adapter import adapter_factory
 from tta.utils import TTADataManager
 from tta.visualizer import TTAVisualizer
+from device_manager import global_device
 
 class TTARunner(nn.Module):
     def __init__(self, cfg, model: nn.Module):
@@ -50,7 +51,10 @@ class TTARunner(nn.Module):
 
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
-        amplitude = torch.abs(fft_result)
+        if global_device == torch.device('npu'):
+            amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+        else:
+            amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
         try:
             period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
@@ -69,7 +73,7 @@ class TTARunner(nn.Module):
 
             for _ in range(self.steps_per_batch):
                 self.n_adapt += 1
-                pred_adapted = self._forward_with_adapter(pred, inputs_history[0])
+                pred_adapted = self._forward_with_adapter(pred)
                 mse_loss = F.mse_loss(pred_adapted, ground_truth)
                 reg_loss = F.mse_loss(pred_adapted, pred) 
                 loss = mse_loss + self.reg_coeff * reg_loss
@@ -82,7 +86,7 @@ class TTARunner(nn.Module):
     def _adapt_with_partial_ground_truth(self, pred, ground_truth, period, batch_size, batch_idx, cur_enc_window):
         for _ in range(self.steps_per_batch):
             self.n_adapt += 1
-            pred_adapted = self._forward_with_adapter(pred, cur_enc_window)
+            pred_adapted = self._forward_with_adapter(pred)
 
             pred_partial, ground_truth_partial = pred_adapted[0][:period], ground_truth[0][:period]
             mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
@@ -165,7 +169,7 @@ class TTARunner(nn.Module):
                 self.all_preds_base.append(pred.detach().cpu().numpy())
                 # Adapter Forward (No Grad for evaluation first)
                 with torch.no_grad():
-                    pred_adapter = self._forward_with_adapter(pred, cur_enc_window)
+                    pred_adapter = self._forward_with_adapter(pred)
                 
                 # Adaptation
                 self._adapt_with_full_ground_truth_if_available()
@@ -256,7 +260,7 @@ class TTARunner(nn.Module):
         self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
 
     def _setup_tta_method(self):
-        self.tta_method = f"{self.lr}-{self.adapter_name}-{self.gating_name}-reg-{self.reg_coeff}-s-max-{self.s_max}"
+        self.tta_method = f"output-{self.adapter_name}"
         if self.gating_name in ['ci-loss-trend', 'cg-loss-trend']:
             self.tta_method += f"-{self.gating_win_size}"
 
@@ -265,7 +269,7 @@ class TTARunner(nn.Module):
         self._setup_require_grad()
         self._setup_optimizer()
 
-    def _forward_with_adapter(self, base_pred, enc_window):
+    def _forward_with_adapter(self, base_pred):
         input_full = base_pred
         adapter_out = self.base_adapter(input_full)
         

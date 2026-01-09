@@ -4,11 +4,12 @@
 # 实验参数
 ############################################
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("PatchTST")
-DATASETS=("ETTm1")
-# TARGETS=("ETTm1")
-# PRED_LENS=(96 192 336 720)
-PRED_LENS=(192)
+DATASETS=("ETTh2")
+TARGETS=("ETTh1")
+PRED_LENS=(96 192 336 720)
+# PRED_LENS=(192)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
@@ -44,6 +45,6 @@ parallel --lb -j ${TOTAL_JOBS} '
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE True \
         TTA.ENABLE False \
-        TTA.DOMAIN_SHIFT False \
+        TTA.DOMAIN_SHIFT True \
         RESULT_DIR ${RESULT_DIR}
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"

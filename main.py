@@ -57,10 +57,8 @@ def main():
             adapter = dynatta.build_adapter(cfg, model)
         elif cfg.TTA.METHOD in ['COSA']:
             adapter = cosa.build_adapter(cfg, model)
-        elif cfg.TTA.METHOD == "Ours":
+        elif cfg.TTA.METHOD == "Output":
             adapter = build_tta_runner(cfg, model)
-        elif cfg.TTA.METHOD == "Ours":
-            adapter = tta_out.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Dual-tta":
             adapter = tta_dual.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Ours-tta":
