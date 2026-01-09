@@ -110,9 +110,8 @@ class CoBA_GCM(nn.Module):
     def _get_query(self, x):
         batch_size = x.shape[0]
         
-        x_fft = torch.fft.rfft(x, dim=1).to(x.dtype)
-        
-        x_mag = x_fft.abs()
+        x_fft = torch.fft.rfft(x, dim=1)
+        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
         
         x_feat = x_mag.reshape(batch_size, -1)
         
@@ -209,7 +208,7 @@ class CoBA_low_rank_GCM(nn.Module):
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = x_fft.abs()
+        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
         
         x_feat = x_mag.reshape(batch_size, -1)
         

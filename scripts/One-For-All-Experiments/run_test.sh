@@ -3,11 +3,14 @@
 ############################################
 # 实验参数
 ############################################
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("MICN")
+DATASETS=("ETTm2")
 # MODELS=("PatchTST")
-DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 TARGETS=("ETTh1")
-PRED_LENS=(96 192 336 720)
+# PRED_LENS=(96 192 336 720)
+PRED_LENS=(720)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量

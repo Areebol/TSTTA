@@ -293,7 +293,8 @@ class Adapter(nn.Module):
                 if self.cfg.TTA.PETSA.CALI_MODULE:
                     pred = self.cali.output_calibration(pred)
                 
-                loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
+                feq_temp = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
+                loss_feq = torch.sqrt(feq_temp.real.pow(2) + feq_temp.imag.pow(2)).mean() 
                 loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
                 loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA
 
@@ -327,7 +328,8 @@ class Adapter(nn.Module):
         if self.cfg.TTA.PETSA.CALI_MODULE:
             pred = self.cali.output_calibration(pred)
 
-        loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1)).abs().mean() 
+        feq_temp = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1))
+        loss_feq = torch.sqrt(feq_temp.real.pow(2) + feq_temp.imag.pow(2)).mean() 
         loss_tmp = torch.nn.functional.huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
 
         loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA

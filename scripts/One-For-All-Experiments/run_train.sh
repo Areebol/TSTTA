@@ -3,11 +3,11 @@
 MODELS=("PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-# MODELS=("OLS")
-# DATASETS=("ETTh1")
-# PRED_LENS=(96)
+MODELS=("MICN")
+DATASETS=("ETTm2")
+PRED_LENS=(720)
 
-NPUS=(0 1 2 3)
+NPUS=(1 2 3)
 NNPU=${#NPUS[@]}   # NPU 数量
 
 PER_NPU=8
