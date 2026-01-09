@@ -50,7 +50,8 @@ class TTARunner(nn.Module):
 
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
-        amplitude = torch.abs(fft_result)
+        # amplitude = torch.abs(fft_result)
+        amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
         power = torch.mean(amplitude ** 2, dim=0)
         try:
             period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
