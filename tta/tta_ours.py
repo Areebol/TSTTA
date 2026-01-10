@@ -361,6 +361,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'coba-GCM': CoBA_GCM,
         'lowrank-coba-GCM': CoBA_low_rank_GCM,
         'identity': IdentityAdapter,
+        'aux-GCM': Auxiliary_GCM,
     }
     if model_type == 'coba-GCM':
         coba_params = {
@@ -375,7 +376,11 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         params.update(coba_params)
     elif model_type == 'identity':
         return CalibrationContainer(None, None)
-
+    elif model_type == 'aux-GCM':
+        aux_params = {
+        }
+        params.update(aux_params)
+        
     ModelClass = constructors.get(model_type)
     if not ModelClass:
         raise ValueError(f"Unknown adapter type: {model_type}")
@@ -475,7 +480,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_csv_window_range")
             and hasattr(ds, "get_test_windows_for_csv")
         )
-        if isinstance(self.cali.out_cali, CoBA_GCM) or isinstance(self.cali.out_cali, CoBA_low_rank_GCM):
+        if isinstance(self.cali.out_cali, CoBA_GCM) or isinstance(self.cali.out_cali, CoBA_low_rank_GCM) or isinstance(self.cali.out_cali, Auxiliary_GCM):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
