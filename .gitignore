@@ -1,5 +1,6 @@
 TTFBench/
 data
+kernel_meta
 
 **/__pycache__/
 checkpoints/

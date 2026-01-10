@@ -134,7 +134,7 @@ class Model(nn.Module):
                                              dropout=configs.dropout,
                                              d_layers=configs.d_layers, decomp_kernel=decomp_kernel,
                                              c_out=configs.c_out, conv_kernel=conv_kernel,
-                                             isometric_kernel=isometric_kernel, device=torch.device('cuda:0'))
+                                             isometric_kernel=isometric_kernel, device=global_device)
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
             # refer to DLinear
             self.regression = nn.Linear(configs.seq_len, configs.pred_len)

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import math 
 from device_manager import global_device
+from loss import stable_complex_abs
 
 class BaseAdapter(nn.Module):
     def __init__(self, pred_len: int, n_vars: int):
@@ -86,7 +87,7 @@ class FreqAdapter(BaseAdapter):
         x_fft = torch.fft.rfft(base_pred, dim=1)
         
         if global_device == torch.device('npu'):
-            amp = torch.sqrt(x_fft.real.pow(2) + x_fft.imag.pow(2))
+            amp = stable_complex_abs(x_fft)
         else:
             amp = torch.abs(x_fft)
         phase = torch.angle(x_fft)

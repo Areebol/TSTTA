@@ -96,7 +96,7 @@ class CoBA_GCM(nn.Module):
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
-        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+        # self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
 
         if var_wise:
@@ -110,9 +110,8 @@ class CoBA_GCM(nn.Module):
     def _get_query(self, x):
         batch_size = x.shape[0]
         
-        x_fft = torch.fft.rfft(x, dim=1).to(x.dtype)
-        
-        x_mag = x_fft.abs()
+        x_fft = torch.fft.rfft(x, dim=1)
+        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
         
         x_feat = x_mag.reshape(batch_size, -1)
         
@@ -150,9 +149,11 @@ class CoBA_GCM(nn.Module):
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            out = x + feat_trans + tafas_output
         else:
-            out = x + torch.tanh(self.gating) * feat_trans
+            # out = x + torch.tanh(self.gating) * feat_trans
+            out = x + feat_trans
         
         self.coeffs = coeffs
         
@@ -209,7 +210,7 @@ class CoBA_low_rank_GCM(nn.Module):
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = x_fft.abs()
+        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
         
         x_feat = x_mag.reshape(batch_size, -1)
         
@@ -234,10 +235,6 @@ class CoBA_low_rank_GCM(nn.Module):
             u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
             v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
             # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
-            # x shape: (B, L, V) -> 这里的乘法需要小心维度
-            # 实际上可以利用结合律进一步加速：
-            # feat_trans = (x.transpose(1,2).unsqueeze(-2) @ u.permute(0,3,1,2) @ v.permute(0,3,1,2))
-            # 或者简单点：
             w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
             feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
         else:
@@ -251,12 +248,24 @@ class CoBA_low_rank_GCM(nn.Module):
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            out = x + feat_trans + tafas_output
         else:
-            out = x + torch.tanh(self.gating) * feat_trans
+            # out = x + torch.tanh(self.gating) * feat_trans
+            out = x + feat_trans
         
         self.coeffs = coeffs
-        
+        if torch.isnan(out).any():
+            print("NaN detected in CoBA_low_rank_GCM output.")
+            if torch.isnan(self.bases_left).any():
+                print("NaN detected in bases_left.")
+                print(self.bases_left)
+            if torch.isnan(self.bases_right).any():
+                print("NaN detected in bases_right.")
+            if torch.isnan(coeffs).any():
+                print("NaN detected in coeffs.")
+            exit()
+
         return out
 
     def get_optim_params(self):

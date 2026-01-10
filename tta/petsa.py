@@ -18,6 +18,7 @@ from config import get_norm_method
 import math
 from tta.utils import save_tta_results
 from device_manager import global_device
+from loss import stable_complex_abs
 
 class CorrCoefLoss(nn.Module):
 
@@ -276,7 +277,7 @@ class Adapter(nn.Module):
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
         if global_device == torch.device('npu'):
-            amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+            amplitude = stable_complex_abs(fft_result)
         else:
             amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
@@ -305,7 +306,7 @@ class Adapter(nn.Module):
 
                 if global_device == torch.device('npu'):
                     loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
-                    loss_feq = torch.sqrt(loss_feq.real.pow(2) + loss_feq.imag.pow(2)).mean()
+                    loss_feq = stable_complex_abs(loss_feq).mean()
                     loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
                 else:
                     loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
@@ -344,7 +345,7 @@ class Adapter(nn.Module):
 
         if global_device == torch.device('npu'):
             loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1))
-            loss_feq = torch.sqrt(loss_feq.real.pow(2) + loss_feq.imag.pow(2)).mean()
+            loss_feq = stable_complex_abs(loss_feq).mean()
             loss_tmp = huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
         else:
             loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1)).abs().mean() 

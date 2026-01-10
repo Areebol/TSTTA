@@ -33,14 +33,28 @@ class CorrCoefLoss(nn.Module):
         
         return -corr_xy
 
+def stable_complex_abs(z):
+    x = torch.abs(z.real)
+    y = torch.abs(z.imag)
+    m = torch.maximum(x, y)
+    r = torch.minimum(x, y) / (m + 1e-12)
+    return m * torch.sqrt(1 + r * r)
+
 class PETSALoss(nn.Module):
     def __init__(self, alpha=0.1):
         super().__init__()
         self.alpha = alpha
         self.person_cor = CorrCoefLoss()
-        
+    
     def forward(self, pred, ground_truth):
-        loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
+        freq_temp = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
+        loss_feq = stable_complex_abs(freq_temp).mean()
+
+        if torch.isnan(loss_feq):
+            print("NaN detected in frequency loss")
+            print(loss_feq)
+            raise ValueError("NaN detected in frequency loss")
+            
         loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
         loss =  loss_tmp + loss_feq * self.alpha
         coss = self.person_cor(pred, ground_truth)
@@ -50,6 +64,13 @@ class PETSALoss(nn.Module):
         loss_mean = F.l1_loss(pred.mean(dim=1, keepdim=True), 
                                 ground_truth.mean(dim=1, keepdim=True))
         loss +=  ((coss + loss_var + loss_mean))
+        if torch.isnan(loss):
+            print("NaN detected in PETSALoss")
+            print(pred)
+            print(loss_var)
+            print(loss_mean)
+            raise ValueError("NaN detected in PETSALoss")
+            
         return loss
     
 class OrthoLoss(nn.Module):
@@ -120,8 +141,8 @@ class CoBA_Loss(nn.Module):
     def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
         super().__init__()
         self.task_loss_fn = PETSALoss(alpha=0.1)
+        # self.task_loss_fn = StandardMSELoss()
         self.ortho_loss_fn = OrthoLoss()
-        # self.sparse_loss_fn = SparsityLoss()
         
         self.lambda_ortho = lambda_ortho
         self.lambda_sparse = lambda_sparse
@@ -166,9 +187,14 @@ class LowRankCoBALoss(nn.Module):
         
         # 1. 任务 Loss (MSE + ...)
         l_task = self.task_loss_fn(pred, ground_truth)
-        
+        if torch.isnan(l_task):
+            print("NaN detected in task loss")
+            raise ValueError("NaN detected in task loss")
         # 2. 正交 Loss
         l_ortho = self.ortho_loss_fn(bases_left, bases_right)
+        if torch.isnan(l_ortho):
+            print("NaN detected in ortho loss")
+            raise ValueError("NaN detected in ortho loss")
         
         l_total = l_task + (self.lambda_ortho * l_ortho)
         

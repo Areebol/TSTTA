@@ -15,6 +15,7 @@ from utils.misc import prepare_inputs
 from config import get_norm_method
 from tta.utils import save_tta_results
 from device_manager import global_device
+from loss import stable_complex_abs
 
 
 class Adapter(nn.Module):
@@ -338,7 +339,7 @@ class Adapter(nn.Module):
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
         if global_device == torch.device('npu'):
-            amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+            amplitude = stable_complex_abs(fft_result)
         else:
             amplitude = torch.abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
