@@ -275,7 +275,46 @@ class CoBA_low_rank_GCM(nn.Module):
         params.append(self.tafas_gating)
         return params
 
+class Auxiliary_GCM(nn.Module):
+    def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32):
+        super(Auxiliary_GCM, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.online_mode = False
+        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+        if var_wise:
+            self.base = nn.Parameter(torch.Tensor(window_len, window_len, n_var))
+        else:
+            self.base = nn.Parameter(torch.Tensor(window_len, window_len))
+        
+        nn.init.xavier_uniform_(self.base) 
 
+    def forward(self, x):
+        """
+        x shape: (Batch, Window_len, N_var)
+        """
+        batch_size = x.size(0)
+
+        w_sample = self.base
+
+        if self.var_wise:
+            feat_trans = torch.einsum('biv,iov->bov', x, self.base)
+        else:
+            feat_trans = torch.einsum('biv,io->bov', x, self.base)
+
+        feat_trans = feat_trans
+        out = x + feat_trans
+        
+        return out
+
+    def get_optim_params(self):
+        params = []
+        params.append(self.bias)
+        return params
+    
 class CoBA_Analyzer:
     def __init__(self, model):
         """
