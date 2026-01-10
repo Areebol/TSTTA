@@ -57,8 +57,8 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.SOLVER.BASE_LR 1e-3 \
       TTA.DUAL.GCM_N_BASES 6 \
       TTA.DUAL.COBA_ONLINE_ENABLED True \
-      TTA.DUAL.COBA_ONLINE_LR 1e-4 \
-      TTA.DUAL.PRETRAIN_EPOCHS 6 \
+      TTA.DUAL.COBA_ONLINE_LR 1e-3 \
+      TTA.DUAL.PRETRAIN_EPOCHS 4 \
       TRAIN.BATCH_SIZE 512 \
       TTA.METHOD Ours-tta
   ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"

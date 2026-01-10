@@ -2,11 +2,11 @@
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-# MODELS=("OLS")
-# DATASETS=("ETTh1")
-# PRED_LENS=(96)
+MODELS=("DLinear")
+DATASETS=("ETTh1")
+# PRED_LENS=(720)
 
-NPUS=(1 2 3)          # 可用的 NPU ID
+NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=4               # 每个 NPU 并行任务数
@@ -53,11 +53,11 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.CALI_OUTPUT_ENABLE True \
       TTA.DUAL.ADJUST_PRED True \
       RESULT_DIR ${RESULT_DIR} \
-      TTA.SOLVER.BASE_LR 1e-3 \
+      TTA.SOLVER.BASE_LR 1e-4 \
       TTA.DUAL.GCM_N_BASES 6 \
+      TTA.DUAL.PRETRAIN_EPOCHS 2 \
+      TRAIN.BATCH_SIZE 512 \
       TTA.DUAL.COBA_ONLINE_ENABLED False \
       TTA.DUAL.COBA_ONLINE_LR 1e-4 \
-      TTA.DUAL.PRETRAIN_EPOCHS 6 \
-      TRAIN.BATCH_SIZE 512 \
       TTA.METHOD Ours-tta
   ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"

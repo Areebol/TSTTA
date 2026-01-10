@@ -235,10 +235,6 @@ class CoBA_low_rank_GCM(nn.Module):
             u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
             v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
             # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
-            # x shape: (B, L, V) -> 这里的乘法需要小心维度
-            # 实际上可以利用结合律进一步加速：
-            # feat_trans = (x.transpose(1,2).unsqueeze(-2) @ u.permute(0,3,1,2) @ v.permute(0,3,1,2))
-            # 或者简单点：
             w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
             feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
         else:
@@ -259,7 +255,17 @@ class CoBA_low_rank_GCM(nn.Module):
             out = x + feat_trans
         
         self.coeffs = coeffs
-        
+        if torch.isnan(out).any():
+            print("NaN detected in CoBA_low_rank_GCM output.")
+            if torch.isnan(self.bases_left).any():
+                print("NaN detected in bases_left.")
+                print(self.bases_left)
+            if torch.isnan(self.bases_right).any():
+                print("NaN detected in bases_right.")
+            if torch.isnan(coeffs).any():
+                print("NaN detected in coeffs.")
+            exit()
+
         return out
 
     def get_optim_params(self):

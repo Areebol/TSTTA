@@ -191,7 +191,7 @@ if __name__ == "__main__":
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
-        # model_names=["DLinear",] 
+        model_names=["DLinear",] 
         # model_names="DLinear"
-        model_names=None # 设为 None 则显示所有模型
+        # model_names=None # 设为 None 则显示所有模型
     )

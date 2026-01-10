@@ -22,6 +22,7 @@ from tta.visualizer import TTAVisualizer
 import os
 import matplotlib.pyplot as plt
 from device_manager import global_device
+torch.autograd.set_detect_anomaly(True)
 
 class TTADataManager:
     def __init__(self, cfg, enabled=True):
