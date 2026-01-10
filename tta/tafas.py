@@ -15,7 +15,7 @@ from utils.misc import prepare_inputs
 from config import get_norm_method
 from tta.utils import save_tta_results
 from device_manager import global_device
-from loss import stable_complex_abs
+from tta.loss import stable_complex_abs
 
 
 class Adapter(nn.Module):

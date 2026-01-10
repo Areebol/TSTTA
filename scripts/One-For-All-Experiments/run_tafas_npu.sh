@@ -2,7 +2,7 @@
 NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=1               # Parallel jobs per NPU
+PER_NPU=4               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -13,8 +13,8 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+# DATASETS=("ETTh2")
+# TARGETS=("ETTh1")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
 
@@ -49,7 +49,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE False \
         TTA.ENABLE True \
-        TTA.DOMAIN_SHIFT True \
+        TTA.DOMAIN_SHIFT False \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.TAFAS.GATING_INIT ${GATING_INIT} \

@@ -11,8 +11,8 @@ export NPU_STR
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("PatchTST")
-DATASETS=("ETTh1")
-PRED_LENS=(96 192 336 720)
+DATASETS=("ETTh2")
+# PRED_LENS=(96 192 336 720)
 PRED_LENS=(96)
 LRS=(0.001)
 
@@ -54,6 +54,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.OURS.PAAS True \
     TTA.OURS.ADJUST_PRED True \
     TTA.OURS.RESET False \
+    TTA.DUAL.LOSS_NAME 'PETSA' \
     TTA.OURS.ADAPTER.NAME 'affine' \
     TTA.OURS.GATING.NAME 'tanh' \
     TTA.VISUALIZE False \

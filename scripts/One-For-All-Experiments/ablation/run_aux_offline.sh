@@ -7,6 +7,7 @@ DATASETS=("ETTh1" "ETTh2")
 # PRED_LENS=(96)
 
 NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
+NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数
@@ -24,7 +25,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
 
   SEED=0
-  BASE_LR=0.001
+  BASE_LR=0.0001
   WEIGHT_DECAY=0.0001
   GATING_INIT=0.01
   RESULT_DIR="./results/TAFAS/"

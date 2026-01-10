@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from device_manager import global_device
 
 class StandardMSELoss(nn.Module):
     def __init__(self):
@@ -54,8 +55,10 @@ class PETSALoss(nn.Module):
             print("NaN detected in frequency loss")
             print(loss_feq)
             raise ValueError("NaN detected in frequency loss")
-            
-        loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
+        if global_device == torch.device('npu'):
+            loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
+        else:
+            loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
         loss =  loss_tmp + loss_feq * self.alpha
         coss = self.person_cor(pred, ground_truth)
         sf_pred = torch.nn.functional.softmax(pred - pred.mean(dim=1, keepdim=True))
@@ -199,3 +202,24 @@ class LowRankCoBALoss(nn.Module):
         l_total = l_task + (self.lambda_ortho * l_ortho)
         
         return l_total
+    
+def huber_loss(input, target, delta=0.5):
+    abs_diff = torch.abs(input - target)
+    quadratic = torch.clamp(abs_diff, max=delta)
+    linear = abs_diff - quadratic
+    loss = 0.5 * quadratic ** 2 + delta * linear
+    return loss.mean()
+
+
+def build_loss_fn(cfg, loss_name='MSE') -> nn.Module:
+    if loss_name == 'MSE':
+        return StandardMSELoss()
+    elif loss_name == 'PETSA': 
+        alpha = getattr(cfg.TTA.DUAL, 'PETSA_LOSS_ALPHA', 0.1)
+        return PETSALoss(alpha=alpha)
+    elif loss_name == "COBA":
+        return CoBA_Loss(lambda_ortho=0.01)
+    elif loss_name == "LOWRANK-COBA":
+        return LowRankCoBALoss(lambda_ortho=0.01)
+    else:
+        raise ValueError(f"Unknown Loss type: {loss_name}")

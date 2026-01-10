@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math 
 from device_manager import global_device
-from loss import stable_complex_abs
+from tta.loss import stable_complex_abs
 
 class BaseAdapter(nn.Module):
     def __init__(self, pred_len: int, n_vars: int):
@@ -103,6 +104,49 @@ class FreqAdapter(BaseAdapter):
         delta = x_adapted - base_pred
         
         return delta
+    
+class ComplexFreqAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.freq_len = pred_len // 2 + 1
+        self.scale = 0.02
+        
+        # Parameters for real and imaginary parts
+        # r/i: weights, rb/ib: biases
+        self.r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_vars))
+        self.i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_vars))
+        self.rb = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        self.ib = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        
+        self.sparsity_threshold = 0.01
+        
+    def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
+        B, L, D = base_pred.shape
+        assert L == self.pred_len and D == self.n_vars
+        
+        # FFT with ortho norm (Energy preserving)
+        x_fft = torch.fft.rfft(base_pred, dim=1, norm='ortho')
+        
+        # Linear Complex Transform (No ReLU, directly learning residual)
+        # Delta_real = R*r - I*i + rb
+        # Delta_imag = I*r + R*i + ib
+        delta_real = (
+            x_fft.real * self.r - x_fft.imag * self.i + self.rb
+        )
+        delta_imag = (
+            x_fft.imag * self.r + x_fft.real * self.i + self.ib
+        )
+        
+        # Combine and softshrink (Sparsity on Residual)
+        y_stack = torch.stack([delta_real, delta_imag], dim=-1)
+        y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
+        y = torch.view_as_complex(y_stack)
+        
+        # iFFT with ortho norm
+        # Output is the direct residual delta
+        delta = torch.fft.irfft(y, n=L, dim=1, norm='ortho')
+        
+        return delta
 
 class TimeFreqDualAdapter(BaseAdapter):
     """
@@ -113,7 +157,8 @@ class TimeFreqDualAdapter(BaseAdapter):
         super().__init__(pred_len, n_vars)
         
         self.linear_adapter = LinearAdapter(pred_len, n_vars)
-        self.freq_adapter = FreqAdapter(pred_len, n_vars)
+        # self.freq_adapter = FreqAdapter(pred_len, n_vars)
+        self.freq_adapter = ComplexFreqAdapter(pred_len, n_vars)
         self.lambda_freq = 10
         
     def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
@@ -213,26 +258,32 @@ class ShiftAdapter(BaseAdapter):
 class AffineAdapter(BaseAdapter):
     def __init__(self, pred_len: int, n_vars: int):
         super().__init__(pred_len, n_vars)
+        # Use a linear layer for each variable to predict affine parameters [scale, shift]
+        self.layers = nn.ModuleList([
+            nn.Linear(pred_len, 2) for _ in range(n_vars)
+        ])
+        
         # Initialize alpha (scale) to 1.0 and beta (shift) to 0.0
-        self.alpha = nn.Parameter(torch.ones(1, 1, n_vars))
-        self.beta = nn.Parameter(torch.zeros(1, 1, n_vars))
+        for layer in self.layers:
+            nn.init.zeros_(layer.weight)
+            layer.bias.data[0] = 1.0
+            layer.bias.data[1] = 0.0
 
-    def forward(self, base_pred: torch.Tensor, x_in: torch.Tensor) -> torch.Tensor:
-        # TTA for "Statistics Adaptation": Affine Transformation
-        # y_final = (base_pred - mean) * alpha + (mean + beta)
-        
-        # 1. Calc input statistics (mean)
-        # using statistics from the input window to anchor the transformation
-        mean = x_in.mean(dim=1, keepdim=True).detach()
-        
-        # 2. Apply Learnable Affine Transformation
-        # This aligns with the idea: y_final = y_norm * (sigma * alpha) + (mu + beta)
-        # assuming base_pred approx equals (y_norm * sigma + mu).
-        # We re-scale the deviation from the mean, and shift the mean itself.
-        return (base_pred - mean) * self.alpha + (mean + self.beta)
-
-    def setup_require_grad(self, require_grad):
-        return super().setup_require_grad(require_grad)
+    def forward(self, base_pred, x_in=None) -> torch.Tensor:
+        B, L, D = base_pred.shape
+        outs = []
+        for i in range(D):
+            x = base_pred[:, :, i]  # (B, L)
+            params = self.layers[i](x)  # (B, 2)
+            
+            alpha = params[:, 0:1]  # (B, 1)
+            beta = params[:, 1:2]   # (B, 1)
+            
+            # Apply affine transformation: y = x * alpha + beta
+            out = x * alpha + beta
+            outs.append(out.unsqueeze(-1))
+            
+        return torch.cat(outs, dim=-1)
 
 def adapter_factory(name, pred_len, n_vars, cfg):
     if name == 'linear':
@@ -247,5 +298,7 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return ShiftAdapter(n_vars=n_vars)
     elif name == "affine":
         return AffineAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "complex_freq":
+        return ComplexFreqAdapter(pred_len=pred_len, n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")

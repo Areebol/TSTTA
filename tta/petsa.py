@@ -18,7 +18,7 @@ from config import get_norm_method
 import math
 from tta.utils import save_tta_results
 from device_manager import global_device
-from loss import stable_complex_abs
+from tta.loss import stable_complex_abs, huber_loss
 
 class CorrCoefLoss(nn.Module):
 
@@ -46,14 +46,6 @@ class CorrCoefLoss(nn.Module):
         corr_xy = torch.clamp(corr_xy, -1.0, 1.0)
         
         return -corr_xy
-
-
-def huber_loss(input, target, delta=0.5):
-    abs_diff = torch.abs(input - target)
-    quadratic = torch.clamp(abs_diff, max=delta)
-    linear = abs_diff - quadratic
-    loss = 0.5 * quadratic ** 2 + delta * linear
-    return loss.mean()
 
 class Adapter(nn.Module):
     def __init__(self, cfg, model: nn.Module, norm_module=None):

@@ -14,7 +14,8 @@ from tta.adapter import adapter_factory
 from tta.utils import TTADataManager
 from tta.visualizer import TTAVisualizer
 from device_manager import global_device
-from loss import stable_complex_abs
+from tta.loss import build_loss_fn, stable_complex_abs
+
 
 class TTARunner(nn.Module):
     def __init__(self, cfg, model: nn.Module):
@@ -43,6 +44,9 @@ class TTARunner(nn.Module):
         self._setup_require_grad()
         self._setup_optimizer()
         self._setup_tta_method()
+        
+        self.loss_fn = build_loss_fn(cfg, loss_name=getattr(cfg.TTA.DUAL, 'LOSS_NAME', 'MSE'))
+        
         self.data_manager = TTADataManager(
             cfg, 
             enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
@@ -75,7 +79,8 @@ class TTARunner(nn.Module):
             for _ in range(self.steps_per_batch):
                 self.n_adapt += 1
                 pred_adapted = self._forward_with_adapter(pred, inputs_history[0])
-                mse_loss = F.mse_loss(pred_adapted, ground_truth)
+                # mse_loss = F.mse_loss(pred_adapted, ground_truth)
+                mse_loss = self.loss_fn(pred_adapted, ground_truth) 
                 reg_loss = F.mse_loss(pred_adapted, pred) 
                 loss = mse_loss + self.reg_coeff * reg_loss
                 self.optimizer.zero_grad()
@@ -90,7 +95,8 @@ class TTARunner(nn.Module):
             pred_adapted = self._forward_with_adapter(pred, cur_enc_window)
 
             pred_partial, ground_truth_partial = pred_adapted[0][:period], ground_truth[0][:period]
-            mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
+            # mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
+            mse_partial = self.loss_fn(pred_partial, ground_truth_partial) 
             reg_loss = F.mse_loss(pred_adapted, pred)
             loss = mse_partial + self.reg_coeff * reg_loss
             self.optimizer.zero_grad()
@@ -211,6 +217,7 @@ class TTARunner(nn.Module):
         self.gating_name = self.cfg.TTA.OURS.GATING.NAME
         self.reg_coeff = self.cfg.TTA.OURS.LOSS.REG_COEFF
         self.gating_win_size = self.cfg.TTA.OURS.GATING.WIN_SIZE
+        self.loss_name = getattr(self.cfg.TTA.DUAL, 'LOSS_NAME', 'MSE')
         
     def _setup_adapter(self):
         device = self.device
@@ -261,7 +268,7 @@ class TTARunner(nn.Module):
         self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
 
     def _setup_tta_method(self):
-        self.tta_method = f"output-{self.adapter_name}-{self.lr}"
+        self.tta_method = f"output-{self.adapter_name}-{self.loss_name}"
         if self.gating_name in ['ci-loss-trend', 'cg-loss-trend']:
             self.tta_method += f"-{self.gating_win_size}"
 
@@ -272,7 +279,8 @@ class TTARunner(nn.Module):
 
     def _forward_with_adapter(self, base_pred, x_in=None):
         if self.adapter_name == 'affine':
-             return self.base_adapter(base_pred, x_in)
+            self.gating_coeff = torch.zeros(0, device=base_pred.device)
+            return self.base_adapter(base_pred, x_in)
         
         input_full = base_pred
         adapter_out = self.base_adapter(input_full)
