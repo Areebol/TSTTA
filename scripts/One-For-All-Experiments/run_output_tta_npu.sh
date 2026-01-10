@@ -2,7 +2,7 @@
 NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=1               # Parallel jobs per NPU
+PER_NPU=4               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -11,9 +11,9 @@ export NPU_STR
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("PatchTST")
-# DATASETS=("ETTh1")
+DATASETS=("ETTh1")
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(96)
+PRED_LENS=(96)
 LRS=(0.001)
 
 parallel --lb -j ${TOTAL_JOBS} '
@@ -54,7 +54,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.OURS.PAAS True \
     TTA.OURS.ADJUST_PRED True \
     TTA.OURS.RESET False \
-    TTA.OURS.ADAPTER.NAME 'linear' \
+    TTA.OURS.ADAPTER.NAME 'affine' \
     TTA.OURS.GATING.NAME 'tanh' \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}

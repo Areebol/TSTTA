@@ -73,7 +73,7 @@ class TTARunner(nn.Module):
 
             for _ in range(self.steps_per_batch):
                 self.n_adapt += 1
-                pred_adapted = self._forward_with_adapter(pred)
+                pred_adapted = self._forward_with_adapter(pred, inputs_history[0])
                 mse_loss = F.mse_loss(pred_adapted, ground_truth)
                 reg_loss = F.mse_loss(pred_adapted, pred) 
                 loss = mse_loss + self.reg_coeff * reg_loss
@@ -86,7 +86,7 @@ class TTARunner(nn.Module):
     def _adapt_with_partial_ground_truth(self, pred, ground_truth, period, batch_size, batch_idx, cur_enc_window):
         for _ in range(self.steps_per_batch):
             self.n_adapt += 1
-            pred_adapted = self._forward_with_adapter(pred)
+            pred_adapted = self._forward_with_adapter(pred, cur_enc_window)
 
             pred_partial, ground_truth_partial = pred_adapted[0][:period], ground_truth[0][:period]
             mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
@@ -107,7 +107,7 @@ class TTARunner(nn.Module):
     @torch.no_grad()
     def _adjust_prediction(self, pred, inputs, batch_size, period):
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, None)
-        pred_after_adapt = self._forward_with_adapter(pred_after_adapt)
+        pred_after_adapt = self._forward_with_adapter(pred_after_adapt, inputs[0])
         
         for i in range(batch_size - 1):
             pred[i, period - i:] = pred_after_adapt[i, period - i:]
@@ -169,7 +169,7 @@ class TTARunner(nn.Module):
                 self.all_preds_base.append(pred.detach().cpu().numpy())
                 # Adapter Forward (No Grad for evaluation first)
                 with torch.no_grad():
-                    pred_adapter = self._forward_with_adapter(pred)
+                    pred_adapter = self._forward_with_adapter(pred, cur_inputs[0])
                 
                 # Adaptation
                 self._adapt_with_full_ground_truth_if_available()
@@ -260,7 +260,7 @@ class TTARunner(nn.Module):
         self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
 
     def _setup_tta_method(self):
-        self.tta_method = f"output-{self.adapter_name}"
+        self.tta_method = f"output-{self.adapter_name}-{self.lr}"
         if self.gating_name in ['ci-loss-trend', 'cg-loss-trend']:
             self.tta_method += f"-{self.gating_win_size}"
 
@@ -269,7 +269,10 @@ class TTARunner(nn.Module):
         self._setup_require_grad()
         self._setup_optimizer()
 
-    def _forward_with_adapter(self, base_pred):
+    def _forward_with_adapter(self, base_pred, x_in=None):
+        if self.adapter_name == 'affine':
+             return self.base_adapter(base_pred, x_in)
+        
         input_full = base_pred
         adapter_out = self.base_adapter(input_full)
         

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math 
+from device_manager import global_device
 
 class BaseAdapter(nn.Module):
     def __init__(self, pred_len: int, n_vars: int):
@@ -84,7 +85,10 @@ class FreqAdapter(BaseAdapter):
         
         x_fft = torch.fft.rfft(base_pred, dim=1)
         
-        amp = torch.abs(x_fft)
+        if global_device == torch.device('npu'):
+            amp = torch.sqrt(x_fft.real.pow(2) + x_fft.imag.pow(2))
+        else:
+            amp = torch.abs(x_fft)
         phase = torch.angle(x_fft)
         
         amp_adapted = amp * torch.exp(self.amp_gain)
@@ -205,6 +209,30 @@ class ShiftAdapter(BaseAdapter):
     def setup_require_grad(self, require_grad):
         return super().setup_require_grad(require_grad)
 
+class AffineAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        # Initialize alpha (scale) to 1.0 and beta (shift) to 0.0
+        self.alpha = nn.Parameter(torch.ones(1, 1, n_vars))
+        self.beta = nn.Parameter(torch.zeros(1, 1, n_vars))
+
+    def forward(self, base_pred: torch.Tensor, x_in: torch.Tensor) -> torch.Tensor:
+        # TTA for "Statistics Adaptation": Affine Transformation
+        # y_final = (base_pred - mean) * alpha + (mean + beta)
+        
+        # 1. Calc input statistics (mean)
+        # using statistics from the input window to anchor the transformation
+        mean = x_in.mean(dim=1, keepdim=True).detach()
+        
+        # 2. Apply Learnable Affine Transformation
+        # This aligns with the idea: y_final = y_norm * (sigma * alpha) + (mu + beta)
+        # assuming base_pred approx equals (y_norm * sigma + mu).
+        # We re-scale the deviation from the mean, and shift the mean itself.
+        return (base_pred - mean) * self.alpha + (mean + self.beta)
+
+    def setup_require_grad(self, require_grad):
+        return super().setup_require_grad(require_grad)
+
 def adapter_factory(name, pred_len, n_vars, cfg):
     if name == 'linear':
         return LinearAdapter(pred_len=pred_len, n_vars=n_vars)
@@ -216,5 +244,7 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return LowRankGatedAdapter(pred_len=pred_len, n_vars=n_vars, rank=cfg.get('rank', 16))
     elif name == "shift":
         return ShiftAdapter(n_vars=n_vars)
+    elif name == "affine":
+        return AffineAdapter(pred_len=pred_len, n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")
