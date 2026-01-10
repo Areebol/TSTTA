@@ -1,16 +1,16 @@
 #!/bin/bash
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 # MODELS=("OLS")
-# DATASETS=("ETTh1")
+# DATASETS=("ETTh2")
 # PRED_LENS=(96)
 
 # NPUS=(1 2 3)          # 可用的 NPU ID
 NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=4               # 每个 NPU 并行任务数
+PER_NPU=2               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"

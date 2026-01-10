@@ -474,16 +474,17 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_csv_window_range")
             and hasattr(ds, "get_test_windows_for_csv")
         )
-        self._pretrain_adapter()
-        self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
+        if isinstance(self.cali.out_cali, CoBA_GCM) or isinstance(self.cali.out_cali, CoBA_low_rank_GCM):
+            self._pretrain_adapter()
+            self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
-        print("Adapter pre-training completed.")
-        optim_params = self.cali.out_cali.get_optim_params()
-        self.optimizer = torch.optim.Adam(
-            optim_params,
-            lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
-            weight_decay=cfg.SOLVER.WEIGHT_DECAY
-        ) 
+            print("Adapter pre-training completed.")
+            optim_params = self.cali.out_cali.get_optim_params()
+            self.optimizer = torch.optim.Adam(
+                optim_params,
+                lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
+                weight_decay=cfg.SOLVER.WEIGHT_DECAY
+            ) 
         
         
         self.data_manager = TTADataManager(
@@ -509,11 +510,14 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
+                # print(loss)
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                self.cali.out_cali.analyzer.record_batch()
-            self.cali.out_cali.analyzer.end_epoch()
+                if hasattr(self.cali.out_cali, 'analyzer'):
+                    self.cali.out_cali.analyzer.record_batch()
+            if hasattr(self.cali.out_cali, 'analyzer'):
+                self.cali.out_cali.analyzer.end_epoch()
         self._switch_model_to_eval()
         # visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
 
@@ -683,10 +687,12 @@ class Adapter(nn.Module):
             base_pred = pred.clone().detach()
             if self.cfg.TTA.DUAL.ADJUST_PRED:
                 pred, ground_truth = self._adjust_prediction(pred, inputs, batch_size, period)
-            self.cali.out_cali.analyzer.record_batch()
+            if hasattr(self.cali.out_cali, 'analyzer'):
+                self.cali.out_cali.analyzer.record_batch()
             if self.cali.output_calibration is not None:
                 pred = self.cali.output_calibration(pred)
             tta_pred = pred.clone().detach()
+            assert torch.isnan(pred).sum() == 0, f"NaN detected in predictions at step {self.cur_step}"
             mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()

@@ -96,7 +96,7 @@ class CoBA_GCM(nn.Module):
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
-        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+        # self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
 
         if var_wise:
@@ -149,9 +149,11 @@ class CoBA_GCM(nn.Module):
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            out = x + feat_trans + tafas_output
         else:
-            out = x + torch.tanh(self.gating) * feat_trans
+            # out = x + torch.tanh(self.gating) * feat_trans
+            out = x + feat_trans
         
         self.coeffs = coeffs
         
@@ -250,9 +252,11 @@ class CoBA_low_rank_GCM(nn.Module):
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+            out = x + feat_trans + tafas_output
         else:
-            out = x + torch.tanh(self.gating) * feat_trans
+            # out = x + torch.tanh(self.gating) * feat_trans
+            out = x + feat_trans
         
         self.coeffs = coeffs
         
