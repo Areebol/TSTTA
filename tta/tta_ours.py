@@ -459,6 +459,7 @@ class Adapter(nn.Module):
             f'dual-cali-{cali_name}',
             f'loss-{loss_name}',
             f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
+            f'lr-{self.cfg.TTA.SOLVER.BASE_LR}',
             f'mse'
         ]
 

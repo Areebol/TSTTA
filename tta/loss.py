@@ -141,8 +141,8 @@ class LowRankOrthoLoss(nn.Module):
 class CoBA_Loss(nn.Module):
     def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
         super().__init__()
-        self.task_loss_fn = PETSALoss(alpha=0.1)
-        # self.task_loss_fn = StandardMSELoss()
+        # self.task_loss_fn = PETSALoss(alpha=0.1)
+        self.task_loss_fn = StandardMSELoss()
         self.ortho_loss_fn = OrthoLoss()
         
         self.lambda_ortho = lambda_ortho
@@ -170,7 +170,8 @@ class CoBA_Loss(nn.Module):
 class LowRankCoBALoss(nn.Module):
     def __init__(self, lambda_ortho=0.1, lambda_sparse=0.01):
         super().__init__()
-        self.task_loss_fn = PETSALoss(alpha=0.1)
+        # self.task_loss_fn = PETSALoss(alpha=0.1)
+        self.task_loss_fn = StandardMSELoss()
         self.ortho_loss_fn = LowRankOrthoLoss()
         # self.sparse_loss_fn = SparsityLoss()
         

@@ -1,12 +1,11 @@
 #!/bin/bash
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-# PRED_LENS=(96 192 336 720)
-PRED_LENS=(96)
-MODELS=("PatchTST")
-# DATASETS=("ETTh1" "ETTh2")
-DATASETS=("ETTh2")
-# PRED_LENS=(96 192)
+PRED_LENS=(96 192 336 720)
+MODELS=("DLinear")
+DATASETS=("ETTh1" "ETTh2")
+# DATASETS=("ETTh2")
+PRED_LENS=(96 192 336 720)
 
 NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
@@ -49,18 +48,17 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
       TTA.DUAL.GATING_INIT ${GATING_INIT} \
       TTA.DUAL.PETSA_LOWRANK 16 \
-      TTA.DUAL.CALI_NAME lowrank-coba-GCM \
-      TTA.DUAL.LOSS_NAME LOWRANK-COBA \
+      TTA.DUAL.CALI_NAME coba-GCM \
+      TTA.DUAL.LOSS_NAME COBA \
       TTA.DUAL.CALI_INPUT_ENABLE False \
       TTA.DUAL.CALI_OUTPUT_ENABLE True \
       TTA.DUAL.ADJUST_PRED True \
       RESULT_DIR ${RESULT_DIR} \
-      TTA.SOLVER.BASE_LR 1e-4 \
-      TTA.DUAL.GCM_N_BASES 6 \
-      TTA.DUAL.GCM_VAR_WISE True \
-      TTA.DUAL.PRETRAIN_EPOCHS 2 \
-      TRAIN.BATCH_SIZE 512 \
+      TTA.SOLVER.BASE_LR 1e-3 \
+      TTA.DUAL.GCM_N_BASES 1 \
       TTA.DUAL.COBA_ONLINE_ENABLED False \
       TTA.DUAL.COBA_ONLINE_LR 1e-4 \
+      TTA.DUAL.PRETRAIN_EPOCHS 2 \
+      TRAIN.BATCH_SIZE 512 \
       TTA.METHOD Ours-tta
   ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
