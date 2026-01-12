@@ -11,15 +11,16 @@ export NPU_STR
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-# LRS=(0.005 0.003 0.002 0.0008 0.0005)
-LRS=(0.05 0.03 0.02 0.01 0.005 0.001)
 # LRS=(0.5 0.3 0.1 0.08)
 # LRS=(0.003)
-
+# ADAPTERS=("linear")
+# LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
+ADAPTERS=("complex-freq")
+LRS=(0.05 0.03 0.02 0.01 0.005 0.001)
 
 parallel --lb -j ${TOTAL_JOBS} '
   npu_array=($NPU_STR)
@@ -36,6 +37,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   PRED_LEN={3}
   TARGET={4}
   LR={5}
+  ADAPTER={6}
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/output_tta/"
@@ -63,9 +65,9 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.OURS.ADJUST_PRED True \
     TTA.OURS.RESET False \
     TTA.DUAL.LOSS_NAME 'MSE' \
-    TTA.OURS.ADAPTER.NAME 'complex-freq' \
+    TTA.OURS.ADAPTER.NAME ${ADAPTER} \
     TTA.OURS.GATING.NAME 'tanh' \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${ADAPTERS[@]}"

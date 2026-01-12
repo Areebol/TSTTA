@@ -6,8 +6,8 @@
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(192)
 

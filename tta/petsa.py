@@ -255,8 +255,8 @@ class Adapter(nn.Module):
         print(f'Number of adaptations: {self.n_adapt}')
         print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
         dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"        
-        # tta_method = f'PETSA-{self.cfg.TTA.SOLVER.BASE_LR}'
-        tta_method = 'PETSA'
+        tta_method = f'PETSA-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # tta_method = 'PETSA'
         save_tta_results(
             tta_method=tta_method,
             seed=self.cfg.SEED,

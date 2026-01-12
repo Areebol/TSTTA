@@ -13,11 +13,11 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
-LRS=(0.005 0.003 0.002 0.0008 0.0005)
+LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)
