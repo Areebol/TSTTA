@@ -11,6 +11,7 @@ import seaborn as sns
 from utils.misc import prepare_inputs
 import math
 from device_manager import global_device
+from tta.loss import stable_complex_abs
 
 class tafas_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True):
@@ -247,7 +248,7 @@ class CoBA_low_rank_GCM(nn.Module):
             if self.var_wise:
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
-                tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
+                tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
             # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
             out = x + feat_trans + tafas_output
         else:
@@ -273,6 +274,88 @@ class CoBA_low_rank_GCM(nn.Module):
         params.append(self.tafas_weight)
         params.append(self.tafas_bias)
         params.append(self.tafas_gating)
+        return params
+
+class CoBA_online_only(nn.Module):
+    def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32):
+        super(CoBA_online_only, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        self.analyzer = CoBA_Analyzer(self)
+        self.rank = low_ranks
+        self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
+        if var_wise:
+            self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank, n_var))
+            self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len, n_var))
+        else:
+            self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank))
+            self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
+        nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
+        nn.init.zeros_(self.bases_right)
+        fft_len = window_len // 2 + 1
+        self.query_net = nn.Sequential(
+            nn.Linear(fft_len * n_var, feature_dim * 2),
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+
+    def _get_query(self, x):
+        batch_size = x.shape[0]
+        
+        x_fft = torch.fft.rfft(x, dim=1)
+        x_mag = stable_complex_abs(x_fft)
+        
+        x_feat = x_mag.reshape(batch_size, -1)
+        
+        query = self.query_net(x_feat)
+        
+        return query
+
+    def forward(self, x):
+        """
+        x shape: (Batch, Window_len, N_var)
+        """
+        batch_size = x.size(0)
+
+        query = self._get_query(x)
+        query_norm = F.normalize(query, p=2, dim=1)           # (B, D)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
+        similarity = torch.matmul(query_norm, keys_norm.T)
+        
+        coeffs = F.softmax(similarity, dim=-1) # (B, N)
+        if self.var_wise:
+            # 这里的 einsum 效率很高
+            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
+            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
+            # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
+            w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
+            feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
+        else:
+            u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
+            v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
+            w_sample = torch.einsum('blr, bri -> bli', u, v) # 重构回 (B, L, L
+            feat_trans = torch.einsum('biv, boi -> bov', x, w_sample) + self.bias
+
+        out = x + torch.tanh(self.gating) * feat_trans
+        
+        self.coeffs = coeffs
+        return out
+
+    def get_optim_params(self):
+        params = []
+        params.append(self.gating)
+        params.extend(list(self.query_net.parameters()))
+        params.append(self.bases_left)
+        params.append(self.bases_right)
+        params.append(self.bias)
         return params
 
 class Auxiliary_GCM(nn.Module):

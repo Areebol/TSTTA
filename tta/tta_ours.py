@@ -336,10 +336,11 @@ class TTAVisualizer:
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        if cfg.TTA.DUAL.CALI_NAME == 'coba-GCM' or cfg.TTA.DUAL.CALI_NAME == 'lowrank-coba-GCM':
+        if cfg.TTA.DUAL.CALI_NAME.lower().find('coba') >= 0:
             n_var = cfg.DATA.N_VAR
         else:
             n_var = 1 if is_patchtst else cfg.DATA.N_VAR
+        
         if cfg.DATA.NAME == 'eVED':
             n_var = 2
         return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
@@ -360,6 +361,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'petsa-GCM': petsa_GCM,
         'coba-GCM': CoBA_GCM,
         'lowrank-coba-GCM': CoBA_low_rank_GCM,
+        'coba-online-only': CoBA_online_only,
         'identity': IdentityAdapter,
         'aux-GCM': Auxiliary_GCM,
     }
@@ -369,7 +371,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'feature_dim': cfg.TTA.DUAL.GCM_FEA_DIM,
         }
         params.update(coba_params)
-    elif model_type == 'lowrank-coba-GCM':
+    elif model_type == 'lowrank-coba-GCM' or model_type == 'coba-online-only':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -456,21 +458,24 @@ class Adapter(nn.Module):
         input_enable = getattr(self.cfg.TTA.DUAL, 'CALI_INPUT_ENABLE', False)
         output_enable = getattr(self.cfg.TTA.DUAL, 'CALI_OUTPUT_ENABLE', False)
 
-        parts = [
-            f'dual-cali-{cali_name}',
-            f'loss-{loss_name}',
-            f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
-            f'mse'
-        ]
+        # parts = [
+        #     f'dual-cali-{cali_name}',
+        #     f'loss-{loss_name}',
+        #     f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
+        #     f'mse'
+        # ]
+        parts = []
 
-        if input_enable:
-            parts.append("in")
-        if output_enable:
-            parts.append("out")
+        # if input_enable:
+        #     parts.append("in")
+        # if output_enable:
+        #     parts.append("out")
         if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
         else:
             parts.append("coba-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             
         self.save_name = "-".join(parts)
         self.mse_all = []

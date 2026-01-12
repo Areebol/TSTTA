@@ -185,8 +185,8 @@ if __name__ == "__main__":
         output_csv="./results/final_tta_summary.csv", 
         
         # 1. 筛选数据集
-        dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
-        # dataset_names=["ETTh1_2_ETTh2"],
+        # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
+        dataset_names=["ETTh2_2_ETTh1"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1"],
         # dataset_names=None,
         
