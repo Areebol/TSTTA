@@ -336,7 +336,7 @@ class TTAVisualizer:
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        if cfg.TTA.DUAL.CALI_NAME == 'coba-GCM':
+        if cfg.TTA.DUAL.CALI_NAME == 'coba-GCM' or cfg.TTA.DUAL.CALI_NAME == 'lowrank-coba-GCM':
             n_var = cfg.DATA.N_VAR
         else:
             n_var = 1 if is_patchtst else cfg.DATA.N_VAR
@@ -457,7 +457,9 @@ class Adapter(nn.Module):
 
         parts = [
             f'dual-cali-{cali_name}',
-            f'loss-{loss_name}'
+            f'loss-{loss_name}',
+            f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
+            f'mse'
         ]
 
         if input_enable:
