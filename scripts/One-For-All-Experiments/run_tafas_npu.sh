@@ -13,10 +13,11 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 MODELS=("PatchTST")
-# DATASETS=("ETTh2")
-# TARGETS=("ETTh1")
+DATASETS=("ETTh2")
+TARGETS=("ETTh1")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
+LRS=(0.005 0.003 0.002 0.0008 0.0005)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)
@@ -26,15 +27,15 @@ parallel --lb -j ${TOTAL_JOBS} '
     NPU_ID=${npu_array[$slot_idx]}
 
     SEED=0
-    BASE_LR=0.001
     WEIGHT_DECAY=0.0001
     GATING_INIT=0.01
     RESULT_DIR="./results/TAFAS/"
 
     DATASET={2}
+    BASE_LR={5}
     echo "DATASET: ${DATASET}"
 
-    echo "Job {%}: MODEL={1} DATASET={2} PRED={3} TARGET={4} -> Running on NPU $NPU_ID"
+    echo "Job {%}: MODEL={1} DATASET={2} PRED={3} TARGET={4} LR={5} -> Running on NPU $NPU_ID"
     
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
 
@@ -49,11 +50,11 @@ parallel --lb -j ${TOTAL_JOBS} '
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE False \
         TTA.ENABLE True \
-        TTA.DOMAIN_SHIFT False \
+        TTA.DOMAIN_SHIFT True \
         TTA.SOLVER.BASE_LR ${BASE_LR} \
         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
         TTA.TAFAS.GATING_INIT ${GATING_INIT} \
         RESULT_DIR ${RESULT_DIR} \
         TTA.METHOD TAFAS
         
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"  ::: "${LRS[@]}"

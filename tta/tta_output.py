@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from datasets.loader import get_test_dataloader
+from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from models.forecast import forecast
 from tta.utils import save_tta_results
@@ -263,12 +263,19 @@ class TTARunner(nn.Module):
         self.optimizer = torch.optim.Adam(param_groups)
 
     def _setup_test_loader(self):
-        self.test_loader = get_test_dataloader(self.cfg)
+        if self.cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(self.cfg)
+        else:
+            self.test_loader = get_test_dataloader(self.cfg)
+        self.test_data = self.test_loader.dataset.test
         batch_size = len(self.test_loader.dataset)
-        self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
+        if self.cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(self.cfg, batch_size=batch_size)
+        else:
+            self.test_loader = get_test_dataloader(self.cfg, batch_size=batch_size)
 
     def _setup_tta_method(self):
-        self.tta_method = f"output-{self.adapter_name}-{self.loss_name}"
+        self.tta_method = f"output-{self.adapter_name}-{self.lr}"
         if self.gating_name in ['ci-loss-trend', 'cg-loss-trend']:
             self.tta_method += f"-{self.gating_win_size}"
 
@@ -277,11 +284,7 @@ class TTARunner(nn.Module):
         self._setup_require_grad()
         self._setup_optimizer()
 
-    def _forward_with_adapter(self, base_pred, x_in=None):
-        if self.adapter_name == 'affine':
-            self.gating_coeff = torch.zeros(0, device=base_pred.device)
-            return self.base_adapter(base_pred, x_in)
-        
+    def _forward_with_adapter(self, base_pred, x_in=None):        
         input_full = base_pred
         adapter_out = self.base_adapter(input_full)
         
@@ -290,11 +293,15 @@ class TTARunner(nn.Module):
         return base_pred + gating_coeff * adapter_out
 
     def _report(self):
+        if not self.cfg.TTA.DOMAIN_SHIFT:
+            dataset_name = self.cfg.DATA.NAME
+        else:
+            dataset_name = f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method=self.tta_method,
             seed=self.cfg.SEED,
             model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
+            dataset_name=dataset_name,
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),

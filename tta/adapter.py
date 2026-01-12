@@ -38,27 +38,7 @@ class LinearAdapter(BaseAdapter):
             out_var = self.layers[d_idx](y_var)
             outs.append(out_var.unsqueeze(-1))
         return torch.cat(outs, dim=-1)
-    
-class LinearAdapter(BaseAdapter):
-    def __init__(self, pred_len: int, n_vars: int):
-        super().__init__(pred_len, n_vars)
-        self.layers = nn.ModuleList([
-            nn.Linear(pred_len, pred_len) for _ in range(n_vars)
-        ])
-        for lin in self.layers:
-            nn.init.xavier_uniform_(lin.weight, gain=0.1)
-            nn.init.zeros_(lin.bias)
-    
-    def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
-        B, L, D = base_pred.shape
-        assert L == self.pred_len and D == self.n_vars, \
-            f"Adapter expects (B,{self.pred_len},{self.n_vars}), got {base_pred.shape}"
-        outs = []
-        for d_idx in range(D):
-            y_var = base_pred[:, :, d_idx]  # (B, L)
-            out_var = self.layers[d_idx](y_var)
-            outs.append(out_var.unsqueeze(-1))
-        return torch.cat(outs, dim=-1)
+
 
 class FreqAdapter(BaseAdapter):
     """
@@ -160,6 +140,7 @@ class TimeFreqDualAdapter(BaseAdapter):
         # self.freq_adapter = FreqAdapter(pred_len, n_vars)
         self.freq_adapter = ComplexFreqAdapter(pred_len, n_vars)
         self.lambda_freq = 10
+        # self.lambda_freq = nn.Parameter(torch.ones(1, pred_len, n_vars) * 10.0)
         
     def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
         pred_time = self.linear_adapter(base_pred)  # 时域变换
@@ -284,6 +265,161 @@ class AffineAdapter(BaseAdapter):
             outs.append(out.unsqueeze(-1))
             
         return torch.cat(outs, dim=-1)
+    
+class NormAffineAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.pred_len = pred_len
+        self.n_vars = n_vars
+        
+        # 修改点 1: 建议将 Linear 的输入维度设为 pred_len
+        # 这个 Linear 层是用来根据“当前的波形形状”预测“校准参数”的
+        self.layers = nn.ModuleList([
+            nn.Linear(pred_len, 2) for _ in range(n_vars)
+        ])
+        
+        # 初始化: Scale=1.0, Shift=0.0
+        # 对应的 Linear 输出应该是 [1, 0]
+        for layer in self.layers:
+            nn.init.zeros_(layer.weight)
+            # layer.bias[0] -> scale (alpha)
+            layer.bias.data[0] = 0.0
+            # layer.bias[1] -> shift (beta)
+            layer.bias.data[1] = 0.0
+
+    def forward(self, base_pred, x_in) -> torch.Tensor:
+        """
+        base_pred: (B, L, D) 原始模型的预测输出
+        x_in: (B, L_in, D) 原始输入序列 (必须提供，用于计算统计量)
+        """
+        B, L, D = base_pred.shape
+        
+        # -----------------------------------------------------------
+        # 步骤 1: 计算输入的统计量 (Instance Statistics)
+        # -----------------------------------------------------------
+        # 加上 eps 防止除零
+        mean_in = x_in.mean(dim=1, keepdim=True)  # (B, 1, D)
+        std_in = x_in.std(dim=1, keepdim=True) + 1e-5 # (B, 1, D)
+
+        # -----------------------------------------------------------
+        # 步骤 2: 将预测结果归一化到标准正态空间 (Re-Normalization)
+        # -----------------------------------------------------------
+        # 这一步至关重要，它保证了 Linear 层的输入和 base_pred 的梯度都在一个稳定的范围内
+        base_pred_norm = (base_pred - mean_in) / std_in
+
+        outs = []
+        for i in range(D):
+            # 取出第 i 个变量的归一化后的预测值
+            # x_norm: (B, L)
+            x_norm = base_pred_norm[:, :, i] 
+            
+            # -------------------------------------------------------
+            # 步骤 3: 预测仿射参数 (Predict Affine Params)
+            # -------------------------------------------------------
+            # params: (B, 2) -> [scale, shift]
+            # 注意：这里输入的是归一化后的波形，这样更容易学习
+            params = self.layers[i](x_norm) 
+            
+            alpha = 1.0 + params[:, 0:1]  # (B, 1) Scale
+            beta = params[:, 1:2]   # (B, 1) Shift
+            
+            # -------------------------------------------------------
+            # 步骤 4: 在标准空间进行仿射校准
+            # -------------------------------------------------------
+            # calibrated_norm: (B, L)
+            calibrated_norm = x_norm * alpha + beta
+            
+            outs.append(calibrated_norm.unsqueeze(-1))
+            
+        # 合并所有通道: (B, L, D)
+        y_calibrated_norm = torch.cat(outs, dim=-1)
+
+        # -----------------------------------------------------------
+        # 步骤 5: 反归一化 (De-Normalization)
+        # -----------------------------------------------------------
+        # 使用输入的统计量将结果还原回原始量级
+        y_final = y_calibrated_norm * std_in + mean_in - base_pred
+            
+        return y_final
+
+class RobustAffineAdapter(BaseAdapter):
+    def __init__(self, pred_len, n_vars):
+        super().__init__(pred_len, n_vars)
+        # 直接定义可学习的参数，而不是网络层
+        # 初始化为全 0，代表初始状态无改变 (Identity)
+        self.delta_scale = nn.Parameter(torch.zeros(1, 1, n_vars)) 
+        self.delta_shift = nn.Parameter(torch.zeros(1, 1, n_vars))
+
+    def forward(self, base_pred, x_in):
+        # 1. 统计量计算
+        mean_in = x_in.mean(dim=1, keepdim=True)
+        std_in = x_in.std(dim=1, keepdim=True) + 1e-5
+
+        # 2. 归一化 (把问题转换到良态空间)
+        y_norm = (base_pred - mean_in) / std_in
+
+        # 3. 仿射校准 (残差形式: 1 + delta)
+        y_calibrated_norm = y_norm * (1 + self.delta_scale) + self.delta_shift
+
+        # 4. 反归一化
+        y_final = y_calibrated_norm * std_in + mean_in 
+        
+        return y_final - base_pred
+
+
+
+class NormLinearAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.pred_len = pred_len
+        self.n_vars = n_vars
+        
+        # 残差网络：只在归一化空间工作
+        self.resid_layers = nn.ModuleList([
+            nn.Linear(pred_len, pred_len) for _ in range(n_vars)
+        ])
+        
+    #     # 显式的分布校准参数 (Shift & Scale)
+    #     self.delta_mu = nn.Parameter(torch.zeros(n_vars)) 
+    #     self.delta_sigma = nn.Parameter(torch.zeros(n_vars))
+
+    #     self._init_weights()
+
+    # def _init_weights(self):
+    #     for lin in self.resid_layers:
+    #         nn.init.xavier_uniform_(lin.weight, gain=0.1)
+    #         nn.init.zeros_(lin.bias)
+
+    def forward(self, base_pred, x_in=None) -> torch.Tensor:
+        """
+        base_pred: (B, L, D)
+        """
+        B, L, D = base_pred.shape
+        
+        # --- Step A: Instance Normalization (获取 Base 的统计量) ---
+        # 针对每个样本、每个变量计算均值和标准差
+        base_mean = base_pred.mean(dim=1, keepdim=True)  # (B, 1, D)
+        base_std = base_pred.std(dim=1, keepdim=True) + 1e-5 # (B, 1, D)
+        
+        # 将输入归一化到标准空间
+        z = (base_pred - base_mean) / base_std
+        
+        # --- Step B: 在归一化空间做残差修正 ---
+        outs = []
+        for d_idx in range(D):
+            # z_var: (B, L)
+            z_var = z[:, :, d_idx]
+            # 计算残差
+            z_res = self.resid_layers[d_idx](z_var)
+            outs.append(z_res.unsqueeze(-1))
+        
+        z_resid_full = torch.cat(outs, dim=-1) # (B, L, D)
+        
+        # --- Step C: 反归一化回原始空间 ---
+        final_pred = z_resid_full * base_std + base_mean
+        
+        return final_pred
+
 
 def adapter_factory(name, pred_len, n_vars, cfg):
     if name == 'linear':
@@ -298,7 +434,13 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return ShiftAdapter(n_vars=n_vars)
     elif name == "affine":
         return AffineAdapter(pred_len=pred_len, n_vars=n_vars)
-    elif name == "complex_freq":
+    elif name == "norm-linear":
+        return NormLinearAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "norm-affine":
+        return NormAffineAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "robust-affine":
+        return RobustAffineAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "complex-freq":
         return ComplexFreqAdapter(pred_len=pred_len, n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")
