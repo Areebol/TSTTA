@@ -187,7 +187,7 @@ class QueryNet_Freq_Attn(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(n_bands * n_var * embed_dim, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
@@ -236,7 +236,7 @@ class QueryNet_Freq_Light(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(n_bands * n_var, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.LayerNorm(feature_dim * 2),
             nn.Linear(feature_dim * 2, feature_dim)
         )
@@ -276,7 +276,7 @@ class QueryNet_Phase(nn.Module):
         # 输入维度翻倍，因为拼接了 Real 和 Imag
         self.net = nn.Sequential(
             nn.Linear(fft_len * n_var * 2, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
@@ -287,3 +287,68 @@ class QueryNet_Phase(nn.Module):
         x_feat = torch.cat([x_fft.real, x_fft.imag], dim=-1)
         x_feat = x_feat.reshape(batch_size, -1)
         return self.net(x_feat)
+  
+  
+try:
+    from pytorch_wavelets import DWT1D
+    WAVELET_AVAILABLE = True
+except:
+    WAVELET_AVAILABLE = False
+      
+class QueryNet_Wavelet_MS(nn.Module):
+    """
+    Multi-Scale Wavelet Gating (MSWG)
+
+    x: (B, L, V)  # V = #variables
+    输出: (B, feature_dim), 输入给 MoE Router
+    """
+
+    def __init__(self, window_len, n_var, feature_dim, wave='haar', level=3):
+        super().__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.level = level
+
+        # --- 1. Wavelet Transform ---
+        if WAVELET_AVAILABLE:
+            self.dwt = DWT1D(wave=wave, J=level, mode='symmetric')
+        else:
+            raise ImportError("Please install pytorch_wavelets: pip install pytorch_wavelets")
+
+        # 多尺度后，有 (cA3, cD3, cD2, cD1) 共 (level + 1) 个频带
+        n_bands = level + 1   # 3-level → 4 bands
+
+        # --- 2. MLP ---
+        self.mlp = nn.Sequential(
+            nn.Linear(n_bands * n_var, feature_dim * 2),
+            nn.GELU(),
+            nn.LayerNorm(feature_dim * 2),
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        """
+        x: (B, L, V)
+        """
+        B, L, V = x.shape
+
+        # 逐变量做 DWT
+        bands = []  # list of tensors, each shape (B, V)
+
+        # 对每个变量单独进行 DWT（保持通道独立）
+        for v in range(V):
+            xv = x[:, :, v].unsqueeze(1)  # (B, 1, L)
+            cA, cD_list = self.dwt(xv)    # cA: lowest freq | cD_list: high→lower freq
+
+            # cA: (B, 1, L//8), cD_list = [cD3, cD2, cD1]
+            cA_pool = torch.mean(cA, dim=-1)  # (B, 1)
+            bands.append(cA_pool)
+
+            for cD in cD_list:  # from high freq to lower freq
+                cD_pool = torch.mean(cD, dim=-1)  # (B, 1)
+                bands.append(cD_pool)
+
+        # bands: list length = V * (level + 1)，每个项是 (B,1)
+        feat = torch.cat(bands, dim=1)  # (B, V*(level+1))
+
+        return self.mlp(feat)

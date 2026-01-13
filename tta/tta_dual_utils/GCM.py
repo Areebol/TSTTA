@@ -212,6 +212,8 @@ class CoBA_low_rank_GCM(nn.Module):
             self.query_net = QueryNet_Freq_Attn(window_len, n_var, feature_dim)
         elif query_type == 'freq-light':
             self.query_net = QueryNet_Freq_Light(window_len, n_var, feature_dim)
+        elif query_type == 'wave-ms':
+            self.query_net = QueryNet_Wavelet_MS(window_len, n_var, feature_dim)
         else:
             raise ValueError(f"Unknown query_type: {query_type}")
 
@@ -309,6 +311,7 @@ class CoBA_low_rank_GCM(nn.Module):
 
     def get_optim_params(self):
         params = []
+        params.extend(list(self.query_net.parameters()))
         params.append(self.tafas_weight)
         params.append(self.tafas_bias)
         params.append(self.tafas_gating)

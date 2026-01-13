@@ -461,9 +461,11 @@ class Adapter(nn.Module):
             f'loss-{loss_name}',
             f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
             f'lr-{self.cfg.TTA.SOLVER.BASE_LR}',
+            f'online-lr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}',
             f'mse',
             f'querytype-{self.cfg.TTA.DUAL.QUERY_TYPE}',
             f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}',
+            f'finetune-query-net'
         ]
 
         if input_enable:

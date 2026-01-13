@@ -1,16 +1,25 @@
 #!/bin/bash
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS")
+QUERY_TYPES=("freq-base")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+# DATASETS=("ETTm1" "ETTm2" "exchange_rate" "weather")
+PRED_LENS=(96 192 336 720)
+MODELS=("DLinear")
+# DATASETS=("weather")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-# MODELS=("OLS")
-# DATASETS=("ETTh2")
-# PRED_LENS=(96)
+BASE_NS=(6)
+# BASE_NS=(2 10 12 14 16 18 20 22 24)
+# LRS=(0.0001)
+LRS=(0.00001 0.00005 0.0001 0.0005 0.001)
+# ORTH_LOSSES=(0.1 0.05 0.01 0.005 0.001)
+ORTH_LOSSES=(0.01 0.05)
+# ONLINE_LRS=(0.001 0.0001)
+ONLINE_LRS=(0.001)
 
-# NPUS=(1 2 3)          # 可用的 NPU ID
-NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
+NPUS=(1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=2               # 每个 NPU 并行任务数
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -32,7 +41,13 @@ parallel --lb -j ${TOTAL_JOBS} '
   MODEL={1}
   DATASET={2}
   PRED_LEN={3}
-  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3}"
+  GCM_N_BASES={4}
+  query_type={5}
+  BASE_LR={6}
+  ORTH={7}
+  online_lr={8}
+
+  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3}  GCM_N_BASES={4} query_type={5} lr={6} ORTH={7} online_lr={8}"
 
   CUDA_VISIBLE_DEVICES=0 python main.py \
       SEED ${SEED} \
@@ -54,11 +69,14 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.CALI_OUTPUT_ENABLE True \
       TTA.DUAL.ADJUST_PRED True \
       RESULT_DIR ${RESULT_DIR} \
-      TTA.SOLVER.BASE_LR 1e-3 \
-      TTA.DUAL.GCM_N_BASES 6 \
-      TTA.DUAL.COBA_ONLINE_ENABLED True \
-      TTA.DUAL.COBA_ONLINE_LR 1e-3 \
-      TTA.DUAL.PRETRAIN_EPOCHS 4 \
+      TTA.SOLVER.BASE_LR ${BASE_LR} \
+      TTA.DUAL.GCM_N_BASES ${GCM_N_BASES} \
+      TTA.DUAL.GCM_VAR_WISE True \
+      TTA.DUAL.PRETRAIN_EPOCHS 2 \
       TRAIN.BATCH_SIZE 512 \
+      TTA.DUAL.COBA_ONLINE_ENABLED False \
+      TTA.DUAL.COBA_ONLINE_LR ${online_lr} \
+      TTA.DUAL.QUERY_TYPE ${query_type} \
+      TTA.DUAL.LAMBDA_ORTHO ${ORTH} \
       TTA.METHOD Ours-tta
-  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${BASE_NS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${LRS[@]}" ::: "${ORTH_LOSSES[@]}" ::: "${ONLINE_LRS[@]}"
