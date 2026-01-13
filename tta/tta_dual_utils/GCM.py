@@ -317,7 +317,7 @@ class CoBA_low_rank_GCM(nn.Module):
 class CoBA_online_only(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32):
+                 n_bases=8, feature_dim=32, query_type='freq-base'):
         super(CoBA_online_only, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
