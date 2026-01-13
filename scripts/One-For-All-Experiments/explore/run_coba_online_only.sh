@@ -5,15 +5,15 @@ PRED_LENS=(96 192 336 720)
 MODELS=("PatchTST")
 DATASETS=("ETTh2")
 TARGETS=("ETTh1")
-PRED_LENS=(96)
-# LRS=(1e-2 5e-3 3e-3 1e-3 5e-4 1e-4)
-LRS=(1e-3)
+# PRED_LENS=(96)
+LRS=(1e-2 5e-3 3e-3 1e-3 5e-4 1e-4)
+# LRS=(1e-3)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=4               # 每个 NPU 并行任务数
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -67,5 +67,5 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.COBA_ONLINE_LR ${TTA_LR} \
       TTA.DUAL.PRETRAIN_EPOCHS 4 \
       TRAIN.BATCH_SIZE 512 \
-      TTA.METHOD Ours-tta
+      TTA.METHOD coba-online
   ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}"

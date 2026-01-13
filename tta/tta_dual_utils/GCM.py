@@ -112,7 +112,7 @@ class CoBA_GCM(nn.Module):
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
+        x_mag = stable_complex_abs(x_fft)
         
         x_feat = x_mag.reshape(batch_size, -1)
         
@@ -211,7 +211,7 @@ class CoBA_low_rank_GCM(nn.Module):
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
+        x_mag = stable_complex_abs(x_fft)
         
         x_feat = x_mag.reshape(batch_size, -1)
         
