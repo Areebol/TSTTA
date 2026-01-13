@@ -13,6 +13,7 @@ import tta.petsa as petsa
 import tta.tta_dual as tta_dual
 import tta.tta_ours as tta_ours
 import tta.dynatta as dynatta
+import tta.tta_coba_online as tta_coba_online
 from tta.tta_output import build_tta_runner
 from config import get_norm_module_cfg
 
@@ -63,6 +64,8 @@ def main():
             adapter = tta_dual.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "Ours-tta":
             adapter = tta_ours.build_adapter(cfg, model)
+        elif cfg.TTA.METHOD == "CoBA-Online":
+            adapter = tta_coba_online.build_adapter(cfg, model)
         else:
             print(f"Unknown TTA method: {cfg.TTA.METHOD}")
         

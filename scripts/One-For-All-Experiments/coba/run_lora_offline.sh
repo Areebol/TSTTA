@@ -1,10 +1,12 @@
 #!/bin/bash
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-PRED_LENS=(96 192 336 720)
-MODELS=("DLinear")
-DATASETS=("weather")
+# PRED_LENS=(96 192 336 720)
 PRED_LENS=(96)
+MODELS=("PatchTST")
+# DATASETS=("ETTh1" "ETTh2")
+DATASETS=("ETTh2")
+# PRED_LENS=(96 192)
 
 NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
@@ -57,7 +59,7 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.GCM_N_BASES 6 \
       TTA.DUAL.GCM_VAR_WISE True \
       TTA.DUAL.PRETRAIN_EPOCHS 2 \
-      TRAIN.BATCH_SIZE 256 \
+      TRAIN.BATCH_SIZE 512 \
       TTA.DUAL.COBA_ONLINE_ENABLED False \
       TTA.DUAL.COBA_ONLINE_LR 1e-4 \
       TTA.METHOD Ours-tta
