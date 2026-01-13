@@ -11,6 +11,7 @@ import seaborn as sns
 from utils.misc import prepare_inputs
 import math
 from device_manager import global_device
+from tta.tta_dual_utils.query_net import *
 
 class tafas_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True):
@@ -169,7 +170,7 @@ class CoBA_GCM(nn.Module):
 class CoBA_low_rank_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32):
+                 n_bases=8, feature_dim=32, query_type='freq-base'):
         super(CoBA_low_rank_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -188,12 +189,31 @@ class CoBA_low_rank_GCM(nn.Module):
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
         nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
         nn.init.zeros_(self.bases_right)
-        fft_len = window_len // 2 + 1
-        self.query_net = nn.Sequential(
-            nn.Linear(fft_len * n_var, feature_dim * 2),
-            # nn.GELU(),
-            nn.Linear(feature_dim * 2, feature_dim)
-        )
+        # fft_len = window_len // 2 + 1
+        # self.query_net = nn.Sequential(
+        #     nn.Linear(fft_len * n_var, feature_dim * 2),
+        #     # nn.GELU(),
+        #     nn.Linear(feature_dim * 2, feature_dim)
+        # )
+        
+        # --- Query Net Selection Logic (Factory) ---
+        print(f"Initializing CoBA with Query Type: {query_type}")
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base':
+            self.query_net = QueryNet_Freq_Base(window_len, n_var, feature_dim)
+        elif query_type == 'fusion':
+            self.query_net = QueryNet_Fusion_Gated(window_len, n_var, feature_dim)
+        elif query_type == 'multiscale':
+            self.query_net = QueryNet_MultiScale(window_len, n_var, feature_dim)
+        elif query_type == 'phase':
+            self.query_net = QueryNet_Phase(window_len, n_var, feature_dim)
+        elif query_type == 'freq-attn':
+            self.query_net = QueryNet_Freq_Attn(window_len, n_var, feature_dim)
+        elif query_type == 'freq-light':
+            self.query_net = QueryNet_Freq_Light(window_len, n_var, feature_dim)
+        else:
+            raise ValueError(f"Unknown query_type: {query_type}")
 
         self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
@@ -207,6 +227,7 @@ class CoBA_low_rank_GCM(nn.Module):
         self.tafas_bias = nn.Parameter(torch.zeros(window_len, n_var))
 
     def _get_query(self, x):
+        return self.query_net(x)
         batch_size = x.shape[0]
         
         x_fft = torch.fft.rfft(x, dim=1)
@@ -229,7 +250,25 @@ class CoBA_low_rank_GCM(nn.Module):
         keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
         similarity = torch.matmul(query_norm, keys_norm.T)
         
-        coeffs = F.softmax(similarity, dim=-1) # (B, N)
+        # coeffs = F.softmax(similarity, dim=-1) # (B, N)
+        # --- 替换为 Top-K 逻辑 ---
+        k = 2  # 你想要激活的基的数量，比如 2 或 4
+        
+        # 1. 找出分数最高的 k 个值的索引和数值
+        topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
+        
+        # 2. 创建一个全为 -inf 的 mask (这样 Softmax 后会变成 0)
+        mask = torch.full_like(similarity, float('-inf'))
+        
+        # 3. 将 top-k 的位置填回原始的相似度数值
+        # scatter_ 的意思是：在 mask 的 dim=1 维度，按照 topk_indices 的索引，填入 topk_vals
+        mask.scatter_(1, topk_indices, topk_vals)
+        
+        # 4. 再做 Softmax
+        # 此时非 Top-K 的位置是 -inf，softmax 后变为 0
+        # Top-K 的位置会重新归一化，和为 1
+        coeffs = F.softmax(mask, dim=-1)
+        # coeffs = torch.ones_like(coeffs) / self.n_bases  # 测试阶段全部均匀权重
         if self.var_wise:
             # 这里的 einsum 效率很高
             u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)

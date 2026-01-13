@@ -372,6 +372,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
+            'query_type': cfg.TTA.DUAL.QUERY_TYPE,
         }
         params.update(coba_params)
     elif model_type == 'identity':
@@ -404,7 +405,7 @@ def build_loss_fn(cfg) -> nn.Module:
     elif loss_name == "COBA":
         return CoBA_Loss(lambda_ortho=0.01)
     elif loss_name == "LOWRANK-COBA":
-        return LowRankCoBALoss(lambda_ortho=0.01)
+        return LowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -460,7 +461,9 @@ class Adapter(nn.Module):
             f'loss-{loss_name}',
             f'base-n-{self.cfg.TTA.DUAL.GCM_N_BASES}',
             f'lr-{self.cfg.TTA.SOLVER.BASE_LR}',
-            f'mse'
+            f'mse',
+            f'querytype-{self.cfg.TTA.DUAL.QUERY_TYPE}',
+            f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}',
         ]
 
         if input_enable:
