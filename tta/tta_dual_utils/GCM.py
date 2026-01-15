@@ -255,18 +255,42 @@ class CoBA_low_rank_GCM(nn.Module):
         # Top-K 的位置会重新归一化，和为 1
         coeffs = F.softmax(mask, dim=-1)
         # coeffs = torch.ones_like(coeffs) / self.n_bases  # 测试阶段全部均匀权重
+
         if self.var_wise:
-            # 这里的 einsum 效率很高
-            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
-            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
-            # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
-            w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
-            feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
+            # U: (Batch, L_out, Rank, Var) <- 聚合后的 bases_left
+            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   
+            # V: (Batch, Rank, L_in, Var)  <- 聚合后的 bases_right
+            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  
+            
+            # --- 关键优化开始 ---
+            # 原始 x: (B, L_in, V)
+            # Step 1: x(biv) * v(briv) -> (Rank)
+            # indices: batch(b), input_len(i), var(v) AND batch(b), rank(r), input_len(i), var(v)
+            # result shape: (Batch, Rank, Var)
+            x_reduced = torch.einsum('biv, briv -> brv', x, v)
+            
+            # Step 2: intermediate(brv) * u(blrv) -> (Output_len)
+            # indices: batch(b), rank(r), var(v) AND batch(b), output_len(l), rank(r), var(v)
+            # result shape: (Batch, Output_len, Var)
+            feat_trans = torch.einsum('brv, blrv -> blv', x_reduced, u)
+            
+            # 加上 bias
+            feat_trans = feat_trans + self.bias
         else:
             u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
             v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
-            w_sample = torch.einsum('blr, bri -> bli', u, v) # 重构回 (B, L, L
-            feat_trans = torch.einsum('biv, boi -> bov', x, w_sample) + self.bias
+            
+            # Step 1: Project to low rank
+            # x: (B, L, V), v: (B, R, L)
+            # output: (B, R, V)
+            x_reduced = torch.einsum('blv, bri -> brv', x, v)
+            
+            # Step 2: Project back to high rank
+            # x_reduced: (B, R, V), u: (B, L, R)
+            # output: (B, L, V)
+            feat_trans = torch.einsum('brv, bli -> blv', x_reduced, u)
+            
+            feat_trans = feat_trans + self.bias
 
         if self.online_mode:
             if self.var_wise:
