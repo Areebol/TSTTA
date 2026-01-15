@@ -251,7 +251,7 @@ class Adapter(nn.Module):
         self.mae_all = np.concatenate(self.mae_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
-        print('After TSF-TTA of PETSA')
+        print(f'After TSF-TTA of PETSA for pred_len: {self.cfg.DATA.PRED_LEN}')
         print(f'Number of adaptations: {self.n_adapt}')
         print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
         dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"        

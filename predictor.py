@@ -49,6 +49,9 @@ class Predictor:
         results = self.get_results()  # {test_mse: , test_mae:, val_mse: val_mae: }
         self.save_results(results)
         
+        if 'mse_per_var' in self.test_errors:
+            print(f"Test MSE per channels: {self.test_errors['mse_per_var'].mean(axis=0)}")
+        
         self.save_to_npy(**self.errors_all)
 
         # log to W&B
@@ -70,6 +73,7 @@ class Predictor:
         self.norm_module.requires_grad_(False).eval() if self.norm_module is not None else None
         mse_all = []
         mae_all = []
+        mse_per_var_all = []
         
         for inputs in tqdm(dataloader, desc='Calculating Errors'):
             enc_window_raw, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
@@ -113,14 +117,17 @@ class Predictor:
             
             mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1))
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1))
+            mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2)
             
             mse_all.append(mse)
             mae_all.append(mae)
+            mse_per_var_all.append(mse_per_var)
                 
         mse_all = torch.flatten(torch.concat(mse_all, dim=0)).cpu().numpy()
         mae_all = torch.flatten(torch.concat(mae_all, dim=0)).cpu().numpy()
+        mse_per_var_all = torch.concat(mse_per_var_all, dim=0).cpu().numpy()
 
-        return {'mse': mse_all, 'mae': mae_all}
+        return {'mse': mse_all, 'mae': mae_all, 'mse_per_var': mse_per_var_all}
 
     def _get_val_errors(self):
         return self._get_errors_from_dataloader(self.val_loader, tta=False, split='val')
@@ -138,7 +145,7 @@ class Predictor:
 
     def save_results(self, results):
         results_string = ", ".join([f"{metric}: {value:.04f}" for metric, value in results.items()])
-        print("Results without TSF-TTA:")
+        print(f"Results without TSF-TTA for pred_len: {self.cfg.DATA.PRED_LEN}:")
         print(results_string)
 
         with open(os.path.join(mkdir(self.cfg.RESULT_DIR) / "test.txt"), "w") as f:

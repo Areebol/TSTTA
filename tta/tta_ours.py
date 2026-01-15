@@ -666,7 +666,8 @@ class Adapter(nn.Module):
         self.model.eval()
         # self.cali.out_cali.analyzer.plot_stats()
         # self.cali.out_cali.analyzer.plot_evolution()
-        print("Final TTA Results:")
+        tta_method = 'offline' if not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED else 'online'
+        print(f"Final {tta_method} TTA Results for pred_len: {self.cfg.DATA.PRED_LEN}:")
         print(f"MSE mean: {self.mse_all.mean()}")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
         # self.cali.out_cali.analyzer.analyze_sequence()

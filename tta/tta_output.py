@@ -37,6 +37,7 @@ class TTARunner(nn.Module):
         self.n_adapt = 0
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
         
         self._setup_tta_params()
         self._setup_adapter()
@@ -125,6 +126,7 @@ class TTARunner(nn.Module):
         self.data_manager.reset()
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
         self.n_adapt = 0
         self.pred_step_end_dict = {}
         self.inputs_dict = {}
@@ -190,8 +192,10 @@ class TTARunner(nn.Module):
                 # Metrics
                 mse = F.mse_loss(pred_adapter, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
                 mae = F.l1_loss(pred_adapter, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+                mse_per_var = F.mse_loss(pred_adapter, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
                 self.mse_all.append(mse)
                 self.mae_all.append(mae)
+                self.mse_per_var_all.append(mse_per_var)
                 self.data_manager.collect(
                 inputs=cur_enc_window, 
                 base_pred=pred,
@@ -205,6 +209,7 @@ class TTARunner(nn.Module):
 
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
        
         self.full_pred_base = np.concatenate(self.all_preds_base, axis=0)
         self.full_pred_tta = np.concatenate(self.all_preds_tta, axis=0)
@@ -297,6 +302,11 @@ class TTARunner(nn.Module):
             dataset_name = self.cfg.DATA.NAME
         else:
             dataset_name = f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+        
+        print(f'After output adapter TSF-TTA for pred_len: {self.cfg.DATA.PRED_LEN}')
+        print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+        print(f"Test MSE per channels: {self.mse_per_var_all.mean(axis=0)}")
+        
         save_tta_results(
             tta_method=self.tta_method,
             seed=self.cfg.SEED,

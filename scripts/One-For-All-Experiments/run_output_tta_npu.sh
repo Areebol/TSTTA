@@ -2,7 +2,7 @@
 NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=4               # Parallel jobs per NPU
+PER_NPU=1               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -11,8 +11,8 @@ export NPU_STR
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("DLinear")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+DATASETS=("ETTm2")
+TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
 # LRS=(0.5 0.3 0.1 0.08)

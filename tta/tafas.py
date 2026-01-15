@@ -66,6 +66,7 @@ class Adapter(nn.Module):
 
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
 
         ds = self.test_loader.dataset
         self.is_eved_like = (
@@ -199,8 +200,10 @@ class Adapter(nn.Module):
                 
                 mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
                 mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+                mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
                 self.mse_all.append(mse)
                 self.mae_all.append(mae)
+                self.mse_per_var_all.append(mse_per_var)
                 
                 batch_start = batch_end
                 batch_idx += 1
@@ -209,11 +212,14 @@ class Adapter(nn.Module):
 
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
+
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
         print('After TSF-TTA of TAFAS')
-        print(f'Number of adaptations: {self.n_adapt}')
+        print(f'Number of adaptations: {self.n_adapt} for pred_len: {self.cfg.DATA.PRED_LEN}')
         print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+        print(f'Test MSE per channels: {self.mse_per_var_all.mean(axis=0)}')
         print()
 
         if self.cfg.WANDB.ENABLE:
@@ -248,6 +254,7 @@ class Adapter(nn.Module):
 
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
         self.n_adapt = 0
 
         for csv_idx in range(num_csv):
@@ -309,8 +316,11 @@ class Adapter(nn.Module):
 
                     mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
                     mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+                    mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
+
                     self.mse_all.append(mse)
                     self.mae_all.append(mae)
+                    self.mse_per_var_all.append(mse_per_var)
 
                     batch_start = batch_end
                     batch_idx += 1
@@ -321,10 +331,13 @@ class Adapter(nn.Module):
 
         self.mse_all = np.concatenate(self.mse_all) if self.mse_all else np.array([])
         self.mae_all = np.concatenate(self.mae_all) if self.mae_all else np.array([])
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all) if self.mse_per_var_all else np.array([])
+
         if len(self.mse_all) > 0:
             print('After TSF-TTA of TAFAS on EVED (per-CSV)')
             print(f'Number of adaptations: {self.n_adapt}')
             print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+            print(f'Test MSE per channels: {self.mse_per_var_all.mean(axis=0)}')
             print()
         else:
             print('No valid test windows for EVED dataset.')

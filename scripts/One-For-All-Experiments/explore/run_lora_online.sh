@@ -2,12 +2,12 @@
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
-PRED_LENS=(96)
-LRS=(1e-2 5e-3 3e-3 1e-3 5e-4 1e-4)
+MODELS=("DLinear")
+DATASETS=("ETTm2")
+TARGETS=("ETTm1")
+# PRED_LENS=(96)
 LRS=(1e-3)
+# LRS=(1e-3)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)          # 可用的 NPU ID

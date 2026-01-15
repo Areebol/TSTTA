@@ -2,10 +2,12 @@
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
-MODELS=("PatchTST")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+MODELS=("DLinear")
+DATASETS=("ETTm2")
+TARGETS=("ETTm1")
 # PRED_LENS=(96)
+# LRS=(1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
+LRS=(1e-4)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
@@ -33,7 +35,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   DATASET={2}
   PRED_LEN={3}
   TARGET={4}
-  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3} TARGET={4}"
+  LR={5}
+  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3} TARGET={4} LR={5}"
 
   CUDA_VISIBLE_DEVICES=0 python main.py \
       SEED ${SEED} \
@@ -56,7 +59,7 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.CALI_OUTPUT_ENABLE True \
       TTA.DUAL.ADJUST_PRED True \
       RESULT_DIR ${RESULT_DIR} \
-      TTA.SOLVER.BASE_LR 1e-4 \
+      TTA.SOLVER.BASE_LR ${LR} \
       TTA.DUAL.GCM_N_BASES 6 \
       TTA.DUAL.GCM_VAR_WISE True \
       TTA.DUAL.PRETRAIN_EPOCHS 2 \
@@ -64,4 +67,4 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.COBA_ONLINE_ENABLED False \
       TTA.DUAL.COBA_ONLINE_LR 1e-4 \
       TTA.METHOD Ours-tta
-  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"
+  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}"
