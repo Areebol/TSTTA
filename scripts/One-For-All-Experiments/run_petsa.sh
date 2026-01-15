@@ -1,18 +1,18 @@
 #!/bin/bash
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# PRED_LENS=(96 192 336 720)
-# TARGETS=("ETTh2")
+#  MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("DLinear")
+PRED_LENS=(96 192 336 720)
+# PRED_LENS=(336)
+# TARGETS=("ETTm2" )
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 # MODELS=("iTransformer" "MICN" "OLS" "PatchTST")
+DATASETS=("ETTh1" )
 
-PRED_LENS=(720)
-MODELS=("MICN")
-DATASETS=("ETTm2")
-
-NPUS=(0 1 2 3)          # 可用的 NPU ID
+NPUS=(5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=8               # 每个 NPU 并行任务数
+# PER_NPU=8               # 每个 NPU 并行任务数
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -39,7 +39,7 @@ parallel -j 8 --delay 0 '
     # === 设置 NPU 可见设备 ===
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
     
-    CUDA_VISIBLE_DEVICES=$GPU python main.py \
+     python main.py \
         SEED ${SEED} \
         DATA.NAME {2} \
         DATA.DOMAIN_SHIFT_TARGET {4} \

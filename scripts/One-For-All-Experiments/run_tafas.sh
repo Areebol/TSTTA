@@ -1,16 +1,15 @@
 #!/bin/bash
 # export CUDA_VISIBLE_DEVICES=0
 
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+#  MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+ DATASETS=("ETTh1")
+MODELS=("DLinear")
+ PRED_LENS=(96 192 336 720)
+#DATASETS=("ETTh2")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("OLS")
-
-# PRED_LENS=(96 192 336 720)
-DATASETS=("ETTh2")
-# DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-TARGETS=("ETTh1")
-# MODELS=("DLinear")
-PRED_LENS=(96)
+# TARGETS=("ETTh1" )
+# MODELS=("DLinear" "FreTS")
+#PRED_LENS=(96)
 
 
 # parallel -j 8 --delay 0 '
@@ -39,16 +38,17 @@ PRED_LENS=(96)
 #         TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
 #         TTA.TAFAS.GATING_INIT ${GATING_INIT} \
 #         RESULT_DIR ${RESULT_DIR} \
-#         TTA.METHOD TAFAS
+#         TTA.METHOD TAF AS
         
 # ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}"
 
 
 
-NPUS=(0 1 2 3)          # 可用的 NPU ID
+NPUS=(5 6 7)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=8               # 每个 NPU 并行任务数
+# PER_NPU=8               # 每个 NPU 并行任务数
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"

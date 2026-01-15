@@ -185,13 +185,14 @@ if __name__ == "__main__":
         output_csv="./results/final_tta_summary.csv", 
         
         # 1. 筛选数据集
-        dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
+        # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
         # dataset_names=["ETTh1"],
-        # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1"],
+        dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1",
+                       "ETTh1_2_ETTm1", "ETTm1_2_ETTh1", "ETTh2_2_ETTm2", "ETTm2_2_ETTh2"],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
-        model_names=["DLinear",] 
-        # model_names="PatchTST"
+        # model_names=["DLinear", "MICN","FreTS", "OLS", "PatchTST","iTransformer"]
+        model_names="DLinear"
         # model_names=None # 设为 None 则显示所有模型
     )
