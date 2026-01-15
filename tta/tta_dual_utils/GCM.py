@@ -189,12 +189,6 @@ class CoBA_low_rank_GCM(nn.Module):
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
         nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
         nn.init.zeros_(self.bases_right)
-        # fft_len = window_len // 2 + 1
-        # self.query_net = nn.Sequential(
-        #     nn.Linear(fft_len * n_var, feature_dim * 2),
-        #     # nn.GELU(),
-        #     nn.Linear(feature_dim * 2, feature_dim)
-        # )
         
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing CoBA with Query Type: {query_type}")
@@ -230,16 +224,6 @@ class CoBA_low_rank_GCM(nn.Module):
 
     def _get_query(self, x):
         return self.query_net(x)
-        batch_size = x.shape[0]
-        
-        x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = torch.sqrt(x_fft.real**2 + x_fft.imag**2)
-        
-        x_feat = x_mag.reshape(batch_size, -1)
-        
-        query = self.query_net(x_feat)
-        
-        return query
 
     def forward(self, x):
         """
@@ -288,11 +272,9 @@ class CoBA_low_rank_GCM(nn.Module):
             if self.var_wise:
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
-                tafas_output = torch.tanh(self.gattafas_gatinging) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
+                tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
             out = x + feat_trans + tafas_output
         else:
-            # out = x + torch.tanh(self.gating) * feat_trans
             out = x + feat_trans
         
         self.coeffs = coeffs
@@ -311,10 +293,14 @@ class CoBA_low_rank_GCM(nn.Module):
 
     def get_optim_params(self):
         params = []
-        params.extend(list(self.query_net.parameters()))
-        params.append(self.tafas_weight)
-        params.append(self.tafas_bias)
-        params.append(self.tafas_gating)
+        if self.online_mode:
+            params.append(self.tafas_weight)
+            params.append(self.tafas_gating)
+            params.append(self.tafas_bias)
+            # params.extend(list(self.query_net.parameters()))
+            # params.append(self.bias)
+        else:
+            params.append(self.tafas_bias)
         return params
 
 class Auxiliary_GCM(nn.Module):
