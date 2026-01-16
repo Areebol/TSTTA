@@ -17,7 +17,6 @@ PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
 # LRS=(0.5 0.3 0.1 0.08)
 # LRS=(0.003)
-ADAPTERS=("linear")
 LRS=(0.001)
 # LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
 # ADAPTERS=("complex-freq")
@@ -55,14 +54,14 @@ parallel --lb -j ${TOTAL_JOBS} '
     TEST.ENABLE False \
     TTA.ENABLE True \
     TTA.DOMAIN_SHIFT True \
-    TTA.METHOD 'Output' \
+    TTA.METHOD 'Dual-tta' \
     TTA.DUAL.LR ${LR} \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
     TTA.DUAL.CALI_NAME tafas-GCM \
-    TTA.DUAL.CALI_INPUT_ENABLE True \
+    TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.LOSS_NAME 'MSE' \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}

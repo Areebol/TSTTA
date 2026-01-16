@@ -11,8 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from config import get_norm_method
 from models.forecast import forecast
 from utils.misc import prepare_inputs
-from models.optimizer import get_optimizer
-from datasets.loader import get_test_dataloader, get_tta_train_dataloader
+from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_domain_shift_dataloader
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
@@ -80,8 +79,8 @@ def build_loss_fn(cfg) -> nn.Module:
 def get_optimizer(optim_params, cfg):
         return torch.optim.Adam(
             optim_params,
-            lr=cfg.TTA.DUAL.LR,
-            weight_decay=cfg.TTA.DUAL.WEIGHT_DECAY
+            lr=cfg.DUAL.LR,
+            weight_decay=cfg.DUAL.WEIGHT_DECAY
         )
 
 class Adapter(nn.Module):
@@ -101,15 +100,18 @@ class Adapter(nn.Module):
         self.optimizer = get_optimizer(trainable_params, cfg.TTA)
         self.optimizer_state = deepcopy(self.optimizer.state_dict())
         
-        self.test_loader = get_test_dataloader(cfg)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
         self.test_data = self.test_loader.dataset.test
         batch_size = len(self.test_loader.dataset)
-        self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
-
-        self.tta_train_loader = get_tta_train_dataloader(cfg)
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
+        else:
+            self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
+        self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=cfg.TRAIN.BATCH_SIZE)
         self.tta_train_data = self.tta_train_loader.dataset.train
-        batch_size = len(self.tta_train_loader.dataset)
-        self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=batch_size)
         
         self.cur_step = cfg.DATA.SEQ_LEN - 2
         self.pred_step_end_dict = {}
@@ -231,11 +233,12 @@ class Adapter(nn.Module):
         self.mae_all = np.concatenate(self.mae_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method=self.save_name,
             seed=self.cfg.SEED,
             model_name=self.cfg.MODEL.NAME,
-            dataset_name=self.cfg.DATA.NAME,
+            dataset_name=dataset_name,
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),

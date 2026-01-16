@@ -27,6 +27,7 @@ class tafas_GCM(nn.Module):
         self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
 
+        
     def forward(self, x):
         if self.var_wise:
             x = x + torch.tanh(self.gating) * (torch.einsum('biv,iov->bov', x, self.weight) + self.bias)
