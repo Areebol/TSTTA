@@ -180,13 +180,14 @@ class CoBA_low_rank_GCM(nn.Module):
         self.online_mode = False
         self.analyzer = CoBA_Analyzer(self)
         self.rank = low_ranks
-        self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
         if var_wise:
             self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank, n_var))
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len, n_var))
+            self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         else:
             self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank))
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
+            self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
         nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
         nn.init.zeros_(self.bases_right)
         
@@ -194,8 +195,12 @@ class CoBA_low_rank_GCM(nn.Module):
         print(f"Initializing CoBA with Query Type: {query_type}")
         if query_type == 'time':
             self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
-        elif query_type == 'freq-base':
-            self.query_net = QueryNet_Freq_Base(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-hybrid':
+            self.query_net = QueryNet_Freq_Hybrid(window_len, n_var, feature_dim)
         elif query_type == 'fusion':
             self.query_net = QueryNet_Fusion_Gated(window_len, n_var, feature_dim)
         elif query_type == 'multiscale':
@@ -231,14 +236,19 @@ class CoBA_low_rank_GCM(nn.Module):
         """
         batch_size = x.size(0)
 
-        query = self._get_query(x)
-        query_norm = F.normalize(query, p=2, dim=1)           # (B, D)
-        keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
-        similarity = torch.matmul(query_norm, keys_norm.T)
+        query = self._get_query(x) # (B, N_vars, D) 
+        query_norm = F.normalize(query, p=2, dim=-1)           # (B, N_vars, D)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1) # (N_vars, N_bases, D)
+        # print(keys_norm.shape)
+        # similarity = torch.matmul(query_norm, keys_norm.T) # (B, N_vars, N_bases)
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2),         # (B, N_vars, 1, D)
+            keys_norm.transpose(1, 2)        # (N_vars, D, N_bases)
+        ).squeeze(2)                          # (B, N_vars, N_bases)
+        # print(similarity.shape)
         
-        # coeffs = F.softmax(similarity, dim=-1) # (B, N)
         # --- 替换为 Top-K 逻辑 ---
-        k = 2  # 你想要激活的基的数量，比如 2 或 4
+        k = 6 
         
         # 1. 找出分数最高的 k 个值的索引和数值
         topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
@@ -247,20 +257,19 @@ class CoBA_low_rank_GCM(nn.Module):
         mask = torch.full_like(similarity, float('-inf'))
         
         # 3. 将 top-k 的位置填回原始的相似度数值
-        # scatter_ 的意思是：在 mask 的 dim=1 维度，按照 topk_indices 的索引，填入 topk_vals
-        mask.scatter_(1, topk_indices, topk_vals)
+        # 在 mask 的 dim=-1 维度，按照 topk_indices 的索引，填入 topk_vals
+        mask.scatter_(-1, topk_indices, topk_vals)
         
         # 4. 再做 Softmax
-        # 此时非 Top-K 的位置是 -inf，softmax 后变为 0
-        # Top-K 的位置会重新归一化，和为 1
-        coeffs = F.softmax(mask, dim=-1)
-        # coeffs = torch.ones_like(coeffs) / self.n_bases  # 测试阶段全部均匀权重
+        coeffs = F.softmax(mask, dim=-1) # (B, N_vars, N_bases)
 
         if self.var_wise:
-            # U: (Batch, L_out, Rank, Var) <- 聚合后的 bases_left
-            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   
-            # V: (Batch, Rank, L_in, Var)  <- 聚合后的 bases_right
-            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  
+            # # U: (Batch, L_out, Rank, Var) <- 聚合后的 bases_left
+            # u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   
+            # # V: (Batch, Rank, L_in, Var)  <- 聚合后的 bases_right
+            # v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  
+            u = torch.einsum('bvn, nlrv -> blrv', coeffs, self.bases_left)
+            v = torch.einsum('bvn, nrlv -> brlv', coeffs, self.bases_right)
             
             # --- 关键优化开始 ---
             # 原始 x: (B, L_in, V)
