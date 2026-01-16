@@ -41,6 +41,8 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'tafas-GCM': tafas_GCM,
         'petsa-GCM': petsa_GCM,
         'coba-GCM': CoBA_GCM,
+        'lowrank-coba-GCM': CoBA_low_rank_GCM,
+        'coba-online-only': CoBA_online_only,
         'identity': IdentityAdapter,
     }
     if model_type == 'coba-GCM':
@@ -59,7 +61,8 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     out_model = None
     
     if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
-        in_model = ModelClass(seq_len, n_var, **params)
+        # in_model = ModelClass(seq_len, n_var, **params)
+        in_model = tafas_GCM(seq_len, n_var, **params)
     if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
         out_model = ModelClass(pred_len, n_var, **params)
     return CalibrationContainer(in_model, out_model)
@@ -72,7 +75,9 @@ def build_loss_fn(cfg) -> nn.Module:
         alpha = getattr(cfg.TTA.DUAL, 'PETSA_LOSS_ALPHA', 0.1)
         return PETSALoss(alpha=alpha)
     elif loss_name == "COBA":
-        return CoBA_Loss(lambda_ortho=0.001)
+        return CoBA_Loss(lambda_ortho=0.01)
+    elif loss_name == "LOWRANK-COBA":
+        return LowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -132,10 +137,17 @@ class Adapter(nn.Module):
             parts.append("in")
         if output_enable:
             parts.append("out")
+        if isinstance(self.cali.out_cali, CoBA_online_only):
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+            if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+                parts.append('out-adapter')
+        if isinstance(self.loss_fn, LowRankCoBALoss):
+            parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         self.save_name = "-".join(parts)
         self.mse_all = []
         self.mae_all = []
+        self.mse_per_var_all = []
 
         ds = self.test_loader.dataset
         self.is_eved_like = (
@@ -143,6 +155,56 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_csv_window_range")
             and hasattr(ds, "get_test_windows_for_csv")
         )
+
+        if isinstance(self.cali.out_cali, CoBA_GCM) or isinstance(self.cali.out_cali, CoBA_low_rank_GCM) or isinstance(self.cali.out_cali, Auxiliary_GCM):
+            self._pretrain_adapter()
+            self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
+        
+            print("Adapter pre-training completed.")
+            optim_params = self.cali.out_cali.get_optim_params()
+            self.optimizer = torch.optim.Adam(
+                optim_params,
+                lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
+                weight_decay=cfg.SOLVER.WEIGHT_DECAY
+            ) 
+        elif isinstance(self.cali.out_cali, CoBA_online_only):
+            self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED
+
+            print("Adapter set to online-only mode.")
+            optim_params = self.cali.out_cali.get_optim_params()
+            self.optimizer = torch.optim.Adam(
+                optim_params,
+                lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
+                weight_decay=cfg.SOLVER.WEIGHT_DECAY
+            ) 
+    
+    def _pretrain_adapter(self):
+        self._switch_model_to_train()
+        for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
+            for inputs in self.tta_train_loader:
+                enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
+                inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
+                if self.cali.input_calibration is not None:
+                    inputs = self.cali.input_calibration(inputs)
+                pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+                if self.cali.output_calibration is not None:
+                    pred = self.cali.output_calibration(pred)
+                if isinstance(self.loss_fn, CoBA_Loss):
+                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                elif isinstance(self.loss_fn, LowRankCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
+                else:
+                    loss = self.loss_fn(pred, ground_truth) 
+                # print(loss)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                if hasattr(self.cali.out_cali, 'analyzer'):
+                    self.cali.out_cali.analyzer.record_batch()
+            if hasattr(self.cali.out_cali, 'analyzer'):
+                self.cali.out_cali.analyzer.end_epoch()
+        self._switch_model_to_eval()
+        # visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
 
     def _reset(self):
         self.manager.reset()
@@ -185,6 +247,8 @@ class Adapter(nn.Module):
                     
                 if isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                elif isinstance(self.loss_fn, LowRankCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
 
@@ -209,6 +273,8 @@ class Adapter(nn.Module):
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
             if isinstance(self.loss_fn, CoBA_Loss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
+            elif isinstance(self.loss_fn, LowRankCoBALoss):
+                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
             self.optimizer.zero_grad()
@@ -231,6 +297,7 @@ class Adapter(nn.Module):
     def _report(self):
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
         dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
@@ -244,6 +311,11 @@ class Adapter(nn.Module):
             mae_after_tta=self.mae_all.mean(),
         )
         self.model.eval()
+
+        tta_method = 'offline' if not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED else 'online'
+        print(f"Final {tta_method} TTA Results for pred_len: {self.cfg.DATA.PRED_LEN}:")
+        print(f"MSE mean: {self.mse_all.mean()}")
+        print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
     
     def adapt(self):
         if getattr(self, "is_eved_like", False):
@@ -296,7 +368,10 @@ class Adapter(nn.Module):
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             self.mse_all.append(mse)
             self.mae_all.append(mae)
-            
+
+            mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
+            self.mse_per_var_all.append(mse_per_var)
+
             batch_start = batch_end
             batch_idx += 1
                 

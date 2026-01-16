@@ -375,6 +375,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
+            'query_type': cfg.TTA.DUAL.QUERY_TYPE,
         }
         params.update(coba_params)
     elif model_type == 'identity':

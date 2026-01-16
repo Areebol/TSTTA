@@ -8,11 +8,12 @@ TARGETS=("ETTm1")
 # PRED_LENS=(96)
 # LRS=(1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
 LRS=(1e-4)
+LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=1               # 每个 NPU 并行任务数
+PER_NPU=4               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -36,7 +37,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   PRED_LEN={3}
   TARGET={4}
   LR={5}
-  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3} TARGET={4} LR={5}"
+  LAMBDA_ORTHO={6}
+  echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3} TARGET={4} LR={5} LAMBDA_ORTHO={6}"
 
   CUDA_VISIBLE_DEVICES=0 python main.py \
       SEED ${SEED} \
@@ -62,9 +64,10 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.SOLVER.BASE_LR ${LR} \
       TTA.DUAL.GCM_N_BASES 6 \
       TTA.DUAL.GCM_VAR_WISE True \
+      TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
       TTA.DUAL.PRETRAIN_EPOCHS 2 \
       TRAIN.BATCH_SIZE 256 \
       TTA.DUAL.COBA_ONLINE_ENABLED False \
       TTA.DUAL.COBA_ONLINE_LR 1e-4 \
       TTA.METHOD Ours-tta
-  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}"
+  ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}"

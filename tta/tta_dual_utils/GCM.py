@@ -171,7 +171,7 @@ class CoBA_GCM(nn.Module):
 class CoBA_low_rank_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-base'):
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI'):
         super(CoBA_low_rank_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -329,19 +329,20 @@ class CoBA_low_rank_GCM(nn.Module):
         params = []
         if self.online_mode:
             params.append(self.tafas_weight)
-            params.append(self.tafas_gating)
             params.append(self.tafas_bias)
+            params.append(self.tafas_gating)
             # params.extend(list(self.query_net.parameters()))
             # params.append(self.bias)
         else:
             params.append(self.tafas_bias)
         return params
 
-class CoBA_low_rank_GCM(nn.Module):
+
+class CoBA_online_only(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-base'):
-        super(CoBA_low_rank_GCM, self).__init__()
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI'):
+        super(CoBA_online_only, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
         self.var_wise = var_wise
@@ -350,28 +351,39 @@ class CoBA_low_rank_GCM(nn.Module):
         self.online_mode = False
         self.analyzer = CoBA_Analyzer(self)
         self.rank = low_ranks
-        self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
         if var_wise:
             self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank, n_var))
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len, n_var))
+            self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         else:
             self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank))
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
-        nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
+            self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
+        
+        # Initialize bases_left with column-wise orthogonality
+        with torch.no_grad():
+            if var_wise:
+                for n in range(n_bases):
+                    for v in range(n_var):
+                        nn.init.orthogonal_(self.bases_left[n, :, :, v])
+            else:
+                for n in range(n_bases):
+                    nn.init.orthogonal_(self.bases_left[n, :, :])
+        
+        # nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
+        
         nn.init.zeros_(self.bases_right)
-        # fft_len = window_len // 2 + 1
-        # self.query_net = nn.Sequential(
-        #     nn.Linear(fft_len * n_var, feature_dim * 2),
-        #     # nn.GELU(),
-        #     nn.Linear(feature_dim * 2, feature_dim)
-        # )
         
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing CoBA with Query Type: {query_type}")
         if query_type == 'time':
             self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
-        elif query_type == 'freq-base':
-            self.query_net = QueryNet_Freq_Base(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-hybrid':
+            self.query_net = QueryNet_Freq_Hybrid(window_len, n_var, feature_dim)
         elif query_type == 'fusion':
             self.query_net = QueryNet_Fusion_Gated(window_len, n_var, feature_dim)
         elif query_type == 'multiscale':
@@ -382,6 +394,8 @@ class CoBA_low_rank_GCM(nn.Module):
             self.query_net = QueryNet_Freq_Attn(window_len, n_var, feature_dim)
         elif query_type == 'freq-light':
             self.query_net = QueryNet_Freq_Light(window_len, n_var, feature_dim)
+        elif query_type == 'wave-ms':
+            self.query_net = QueryNet_Wavelet_MS(window_len, n_var, feature_dim)
         else:
             raise ValueError(f"Unknown query_type: {query_type}")
 
@@ -398,16 +412,6 @@ class CoBA_low_rank_GCM(nn.Module):
 
     def _get_query(self, x):
         return self.query_net(x)
-        batch_size = x.shape[0]
-        
-        x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = stable_complex_abs(x_fft)
-        
-        x_feat = x_mag.reshape(batch_size, -1)
-        
-        query = self.query_net(x_feat)
-        
-        return query
 
     def forward(self, x):
         """
@@ -415,14 +419,19 @@ class CoBA_low_rank_GCM(nn.Module):
         """
         batch_size = x.size(0)
 
-        query = self._get_query(x)
-        query_norm = F.normalize(query, p=2, dim=1)           # (B, D)
-        keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
-        similarity = torch.matmul(query_norm, keys_norm.T)
+        query = self._get_query(x) # (B, N_vars, D) 
+        query_norm = F.normalize(query, p=2, dim=-1)           # (B, N_vars, D)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1) # (N_vars, N_bases, D)
+        # print(keys_norm.shape)
+        # similarity = torch.matmul(query_norm, keys_norm.T) # (B, N_vars, N_bases)
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2),         # (B, N_vars, 1, D)
+            keys_norm.transpose(1, 2)        # (N_vars, D, N_bases)
+        ).squeeze(2)                          # (B, N_vars, N_bases)
+        # print(similarity.shape)
         
-        # coeffs = F.softmax(similarity, dim=-1) # (B, N)
         # --- 替换为 Top-K 逻辑 ---
-        k = 2  # 你想要激活的基的数量，比如 2 或 4
+        k = 2 
         
         # 1. 找出分数最高的 k 个值的索引和数值
         topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
@@ -431,145 +440,69 @@ class CoBA_low_rank_GCM(nn.Module):
         mask = torch.full_like(similarity, float('-inf'))
         
         # 3. 将 top-k 的位置填回原始的相似度数值
-        # scatter_ 的意思是：在 mask 的 dim=1 维度，按照 topk_indices 的索引，填入 topk_vals
-        mask.scatter_(1, topk_indices, topk_vals)
+        # 在 mask 的 dim=-1 维度，按照 topk_indices 的索引，填入 topk_vals
+        mask.scatter_(-1, topk_indices, topk_vals)
         
         # 4. 再做 Softmax
-        # 此时非 Top-K 的位置是 -inf，softmax 后变为 0
-        # Top-K 的位置会重新归一化，和为 1
-        coeffs = F.softmax(mask, dim=-1)
-        # coeffs = torch.ones_like(coeffs) / self.n_bases  # 测试阶段全部均匀权重
+        coeffs = F.softmax(mask, dim=-1) # (B, N_vars, N_bases)
+
         if self.var_wise:
-            # 这里的 einsum 效率很高
-            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
-            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
-            # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
-            w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
-            feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
+            # # U: (Batch, L_out, Rank, Var) <- 聚合后的 bases_left
+            # u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   
+            # # V: (Batch, Rank, L_in, Var)  <- 聚合后的 bases_right
+            # v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  
+            u = torch.einsum('bvn, nlrv -> blrv', coeffs, self.bases_left)
+            v = torch.einsum('bvn, nrlv -> brlv', coeffs, self.bases_right)
+            
+            # --- 关键优化开始 ---
+            # 原始 x: (B, L_in, V)
+            # Step 1: x(biv) * v(briv) -> (Rank)
+            # indices: batch(b), input_len(i), var(v) AND batch(b), rank(r), input_len(i), var(v)
+            # result shape: (Batch, Rank, Var)
+            x_reduced = torch.einsum('biv, briv -> brv', x, v)
+            
+            # Step 2: intermediate(brv) * u(blrv) -> (Output_len)
+            # indices: batch(b), rank(r), var(v) AND batch(b), output_len(l), rank(r), var(v)
+            # result shape: (Batch, Output_len, Var)
+            feat_trans = torch.einsum('brv, blrv -> blv', x_reduced, u)
+            
+            # 加上 bias
+            feat_trans = feat_trans + self.bias
         else:
             u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
             v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
-            w_sample = torch.einsum('blr, bri -> bli', u, v) # 重构回 (B, L, L
-            feat_trans = torch.einsum('biv, boi -> bov', x, w_sample) + self.bias
+            
+            # Step 1: Project to low rank
+            # x: (B, L, V), v: (B, R, L)
+            # output: (B, R, V)
+            x_reduced = torch.einsum('blv, bri -> brv', x, v)
+            
+            # Step 2: Project back to high rank
+            # x_reduced: (B, R, V), u: (B, L, R)
+            # output: (B, L, V)
+            feat_trans = torch.einsum('brv, bli -> blv', x_reduced, u)
+            
+            feat_trans = feat_trans + self.bias
 
         if self.online_mode:
             if self.var_wise:
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,iov->bov', x, self.tafas_weight) + self.tafas_bias)
             else:
                 tafas_output = torch.tanh(self.tafas_gating) * (torch.einsum('biv,io->bov', x, self.tafas_weight) + self.tafas_bias)
-            # out = x + torch.tanh(self.gating) * feat_trans + tafas_output
             out = x + feat_trans + tafas_output
         else:
-            # out = x + torch.tanh(self.gating) * feat_trans
             out = x + feat_trans
         
-        self.coeffs = coeffs
-
+        self.coeffs = torch.zeros(batch_size, self.n_var, self.n_bases, device=x.device)
         return out
 
     def get_optim_params(self):
         params = []
-        params.append(self.tafas_weight)
-        params.append(self.tafas_bias)
-        params.append(self.tafas_gating)
-        return params
-
-class CoBA_online_only(nn.Module):
-    def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
-                 gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-base'):
-        super(CoBA_online_only, self).__init__()
-        self.window_len = window_len
-        self.n_var = n_var
-        self.var_wise = var_wise
-        self.n_bases = n_bases
-        self.feature_dim = feature_dim
-        self.online_mode = False
-        self.analyzer = CoBA_Analyzer(self)
-        self.rank = low_ranks
-        self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
-        if var_wise:
-            self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank, n_var))
-            self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len, n_var))
-        else:
-            self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank))
-            self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
-        nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
-        nn.init.zeros_(self.bases_right)
-        fft_len = window_len // 2 + 1
-        self.query_net = nn.Sequential(
-            nn.Linear(fft_len * n_var, feature_dim * 2),
-            nn.Linear(feature_dim * 2, feature_dim)
-        )
-
-        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
-        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
-
-    def _get_query(self, x):
-        batch_size = x.shape[0]
-        
-        x_fft = torch.fft.rfft(x, dim=1)
-        x_mag = stable_complex_abs(x_fft)
-        
-        x_feat = x_mag.reshape(batch_size, -1)
-        
-        query = self.query_net(x_feat)
-        
-        return query
-
-    def forward(self, x):
-        """
-        x shape: (Batch, Window_len, N_var)
-        """
-        batch_size = x.size(0)
-
-        query = self._get_query(x)
-        query_norm = F.normalize(query, p=2, dim=1)           # (B, D)
-        keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
-        similarity = torch.matmul(query_norm, keys_norm.T)
-        
-        # coeffs = F.softmax(similarity, dim=-1) # (B, N)
-
-        # coeffs = F.softmax(similarity, dim=-1) # (B, N)
-        # --- 替换为 Top-K 逻辑 ---
-        k = 2  # 你想要激活的基的数量，比如 2 或 4
-        
-        # 1. 找出分数最高的 k 个值的索引和数值
-        topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
-        
-        # 2. 创建一个全为 -inf 的 mask (这样 Softmax 后会变成 0)
-        mask = torch.full_like(similarity, float('-inf'))
-        
-        # 3. 将 top-k 的位置填回原始的相似度数值
-        # scatter_ 的意思是：在 mask 的 dim=1 维度，按照 topk_indices 的索引，填入 topk_vals
-        mask.scatter_(1, topk_indices, topk_vals)
-        
-        # 4. 再做 Softmax
-        # 此时非 Top-K 的位置是 -inf，softmax 后变为 0
-        # Top-K 的位置会重新归一化，和为 1
-        coeffs = F.softmax(mask, dim=-1)
-
-        if self.var_wise:
-            # 这里的 einsum 效率很高
-            u = torch.einsum('bn, nliv -> bliv', coeffs, self.bases_left)   # (B, L, R, V)
-            v = torch.einsum('bn, nriv -> briv', coeffs, self.bases_right)  # (B, R, L, V)
-            # 3. 直接应用变换：x @ (u @ v) 优化为 (x @ u) @ v
-            w_sample = torch.einsum('blrv, briv -> bliv', u, v) # 重构回 (B, L, L, V)
-            feat_trans = torch.einsum('biv, boiv -> bov', x, w_sample) + self.bias
-        else:
-            u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
-            v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
-            w_sample = torch.einsum('blr, bri -> bli', u, v) # 重构回 (B, L, L
-            feat_trans = torch.einsum('biv, boi -> bov', x, w_sample) + self.bias
-
-        out = x + torch.tanh(self.gating) * feat_trans
-        
-        self.coeffs = coeffs
-        return out
-
-    def get_optim_params(self):
-        params = []
-        params.append(self.gating)
+        if self.online_mode:
+            params.append(self.gating)
+            params.append(self.tafas_weight)
+            params.append(self.tafas_gating)
+            params.append(self.tafas_bias)
         params.extend(list(self.query_net.parameters()))
         params.append(self.bases_left)
         params.append(self.bases_right)

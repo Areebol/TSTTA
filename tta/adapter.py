@@ -25,7 +25,7 @@ class LinearAdapter(BaseAdapter):
             nn.Linear(pred_len, pred_len) for _ in range(n_vars)
         ])
         for lin in self.layers:
-            nn.init.xavier_uniform_(lin.weight, gain=0.1)
+            nn.init.zeros_(lin.weight)
             nn.init.zeros_(lin.bias)
     
     def forward(self, base_pred: torch.Tensor) -> torch.Tensor:

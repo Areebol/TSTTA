@@ -480,6 +480,7 @@ class Adapter(nn.Module):
         else:
             parts.append("coba-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
             
         self.save_name = "-".join(parts)
         self.mse_all = []
