@@ -18,7 +18,15 @@ from config import get_norm_method
 import math
 from tta.utils import save_tta_results
 from device_manager import global_device
+<<<<<<< HEAD
 from tta.loss import stable_complex_abs, huber_loss
+=======
+from tta.loss import stable_complex_abs
+
+import time
+from tta.tta_dual_utils.performance import record_performance, synchronize_device
+
+>>>>>>> master
 
 class CorrCoefLoss(nn.Module):
 
@@ -203,8 +211,15 @@ class Adapter(nn.Module):
         batch_idx = 0
         is_last = False
         test_len = len(self.test_loader.dataset)
-            
+
+        # === [1] 计时开始 ===
+        print("Synchronizing device for throughput measurement...")    
+
         self.switch_model_to_eval()
+
+        synchronize_device()
+        start_time = time.time()
+
         for idx, inputs in enumerate(self.test_loader):
             enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
             while batch_end < len(enc_window_all):
@@ -247,6 +262,13 @@ class Adapter(nn.Module):
         
         assert self.cur_step == len(self.test_data) - self.cfg.DATA.PRED_LEN - 1
         
+        # === [2] 计时结束 & 记录 ===
+        synchronize_device()
+        end_time = time.time()
+
+        # 调用工具函数记录数据
+        record_performance(self.cfg, self, start_time, end_time, test_len)
+
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
@@ -270,10 +292,8 @@ class Adapter(nn.Module):
     
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
-        if global_device == torch.device('npu'):
-            amplitude = stable_complex_abs(fft_result)
-        else:
-            amplitude = torch.abs(fft_result)
+        # amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+        amplitude = stable_complex_abs(fft_result)
         power = torch.mean(amplitude ** 2, dim=0)
         try:
             period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
@@ -337,13 +357,10 @@ class Adapter(nn.Module):
         if self.cfg.TTA.PETSA.CALI_MODULE:
             pred = self.cali.output_calibration(pred)
 
-        if global_device == torch.device('npu'):
-            loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1))
-            loss_feq = stable_complex_abs(loss_feq).mean()
-            loss_tmp = huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
-        else:
-            loss_feq = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1)).abs().mean() 
-            loss_tmp = torch.nn.functional.huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
+        feq_temp = (torch.fft.rfft(pred[0][:period], dim=1) - torch.fft.rfft(ground_truth[0][:period], dim=1))
+        # loss_feq = torch.sqrt(feq_temp.real.pow(2) + feq_temp.imag.pow(2)).mean() 
+        loss_feq = stable_complex_abs(feq_temp).mean()
+        loss_tmp = torch.nn.functional.huber_loss(pred[0][:period], ground_truth[0][:period], delta=0.5)
 
         loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA
         coss = self.person_cor(pred[0][:period], ground_truth[0][:period])

@@ -17,6 +17,9 @@ from tta.utils import save_tta_results
 from device_manager import global_device
 from tta.loss import stable_complex_abs
 
+import time
+from tta.tta_dual_utils.performance import record_performance, synchronize_device
+
 
 class Adapter(nn.Module):
     def __init__(self, cfg, model: nn.Module, norm_module=None):
@@ -160,6 +163,11 @@ class Adapter(nn.Module):
         is_last = False
         test_len = len(self.test_loader.dataset)
             
+        # === [1] 计时开始 ===
+        self.switch_model_to_eval()
+        synchronize_device()
+        start_time = time.time()
+
         self.switch_model_to_eval()
         for idx, inputs in enumerate(self.test_loader):
             if hasattr(self.test_loader.dataset, "csv_files"):
@@ -209,6 +217,12 @@ class Adapter(nn.Module):
                 batch_idx += 1
 
             assert self.cur_step == len(self.test_data) - self.cfg.DATA.PRED_LEN - 1
+
+        # === [2] 计时结束 & 记录 ===
+        synchronize_device()
+        end_time = time.time()
+        # 调用工具函数记录数据
+        record_performance(self.cfg, self, start_time, end_time, test_len)
 
         self.mse_all = np.concatenate(self.mse_all)
         self.mae_all = np.concatenate(self.mae_all)

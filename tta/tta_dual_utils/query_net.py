@@ -37,7 +37,7 @@ class QueryNet_Time(nn.Module):
 # ==========================================
 # 2. Baseline B: 基础频域 (Freq-Base, 原版)
 # ==========================================
-class QueryNet_Freq_Base(nn.Module):
+class QueryNet_Freq_Base_ChannelDependence(nn.Module):
     """
     Baseline B: 原版实现，只使用 FFT 幅度。
     优点: 对周期性强，平滑噪声。
@@ -59,7 +59,126 @@ class QueryNet_Freq_Base(nn.Module):
         # x_mag = torch.abs(x_fft) # Magnitude
         x_mag = stable_complex_abs(x_fft)  # 更稳定的幅度计算
         x_feat = x_mag.reshape(batch_size, -1)
-        return self.net(x_feat)
+        query = self.net(x_feat)
+        query = query.unsqueeze(1)
+        return query
+
+class QueryNet_Freq_Hybrid(nn.Module):
+    """
+    Hybrid QueryNet:
+    结合了 'Global Context' (变量间依赖) 和 'Local Feature' (变量独立特征)。
+    输出: (Batch, N_var, Feature_dim)
+    """
+    def __init__(self, window_len, n_var, feature_dim, global_hidden=64):
+        super().__init__()
+        fft_len = window_len // 2 + 1
+        
+        # 1. 全局分支 (Global Branch)
+        # 负责“看森林”：压缩所有变量的信息到一个小的全局向量
+        # 为了节省参数，我们先对 Input 做一个降维或者 Pooling
+        self.global_net = nn.Sequential(
+            # 输入: 所有变量的 FFT 拼接 -> 极其巨大，所以我们先用一个技巧
+            # 技巧: 不直接全连接，而是先 Embedding 再聚合，或者直接处理压缩后的特征
+            # 这里为了简单有效，我们对频谱在变量维度求平均 (Mean Pooling) 作为全局输入
+            nn.Linear(fft_len, global_hidden), 
+            nn.GELU(),
+            nn.Linear(global_hidden, feature_dim) 
+        )
+        
+        # 2. 局部分支 (Local Branch - Shared Weights)
+        # 负责“看树木”：独立处理每个变量
+        self.local_net = nn.Sequential(
+            nn.Linear(fft_len, feature_dim),
+            nn.GELU()
+        )
+        
+        # 3. 融合层 (Fusion Layer)
+        # 将 Global(D) + Local(D) -> Query(D)
+        self.fusion_gate = nn.Sequential(
+            nn.Linear(feature_dim * 2, feature_dim),
+            # nn.Tanh() # 限制输出范围，让余弦相似度计算更稳定
+        )
+
+    def forward(self, x):
+        # x: (Batch, Window, N_var)
+        batch_size = x.size(0)
+        n_var = x.size(2)
+        
+        # --- 预处理: FFT ---
+        x_fft = torch.fft.rfft(x, dim=1)
+        x_mag = stable_complex_abs(x_fft) # Shape: (B, Freq, V)
+        
+        # 调整为 (B, V, Freq) 以便处理
+        x_feat = x_mag.permute(0, 2, 1) 
+        
+        # --- A. 局部分支 (Local) ---
+        # 独立提取每个变量的特征
+        # (B, V, F) -> (B, V, D)
+        local_emb = self.local_net(x_feat)
+        
+        # --- B. 全局分支 (Global) ---
+        # 提取全局上下文。这里使用 Mean Pooling 聚合所有变量，
+        # 既保留了整体趋势（如整体周期性），又避免了参数爆炸。
+        # (B, V, F) -> mean -> (B, F)
+        global_input = x_feat.mean(dim=1) 
+        global_emb = self.global_net(global_input) # (B, D)
+        
+        # --- C. 融合 (Fusion) ---
+        # 将全局向量 (B, D) 扩展为 (B, V, D) 并与局部向量拼接
+        global_emb_expanded = global_emb.unsqueeze(1).expand(-1, n_var, -1)
+        
+        # Concatenate: (B, V, 2*D)
+        combined = torch.cat([local_emb, global_emb_expanded], dim=-1)
+        
+        # 生成最终的 Query: (B, V, D)
+        queries = self.fusion_gate(combined)
+        
+        return queries
+
+class QueryNet_Freq_Base_ChannelIndependence(nn.Module):
+    """
+    修改版: 支持 Var-wise Query 生成
+    Input:  (B, L, V)
+    Output: (B, V, feature_dim)
+    """
+    def __init__(self, window_len, n_var, feature_dim):
+        super().__init__()
+        self.n_var = n_var
+        # RFFT 后的长度
+        fft_len = window_len // 2 + 1
+        
+        # --- 核心修改 ---
+        # 1. 输入维度不再乘以 n_var，而是针对单个变量的频谱长度
+        # 2. 我们希望对每个变量独立处理，使用 Shared MLP (对 dim=-1 作用)
+        self.net = nn.Sequential(
+            nn.Linear(fft_len, feature_dim * 2),
+            nn.GELU(), # 建议加上激活函数，增加非线性能力
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        """
+        x: (Batch, Window_len, N_var)
+        """
+        # 1. FFT 变换
+        # x_fft: (Batch, Freq_len, N_var)
+        x_fft = torch.fft.rfft(x, dim=1)
+        
+        # 2. 计算幅度
+        # x_mag: (Batch, Freq_len, N_var)
+        x_mag = stable_complex_abs(x_fft)
+
+        # 3. 维度调整 (Permute)
+        # 我们希望 Linear 层独立作用于每个变量的频谱
+        # 目标形状: (Batch, N_var, Freq_len)
+        x_feat = x_mag.permute(0, 2, 1)
+
+        # 4. 通过 MLP
+        # nn.Linear 默认作用于最后一个维度 (Freq_len)
+        # Input: (B, V, Freq_len) -> Output: (B, V, Feature_dim)
+        query = self.net(x_feat)
+        
+        return query
 
 
 # ==========================================
@@ -187,7 +306,7 @@ class QueryNet_Freq_Attn(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(n_bands * n_var * embed_dim, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
@@ -236,7 +355,7 @@ class QueryNet_Freq_Light(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(n_bands * n_var, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.LayerNorm(feature_dim * 2),
             nn.Linear(feature_dim * 2, feature_dim)
         )
@@ -276,7 +395,7 @@ class QueryNet_Phase(nn.Module):
         # 输入维度翻倍，因为拼接了 Real 和 Imag
         self.net = nn.Sequential(
             nn.Linear(fft_len * n_var * 2, feature_dim * 2),
-            nn.GELU(),
+            # nn.GELU(),
             nn.Linear(feature_dim * 2, feature_dim)
         )
 
@@ -287,3 +406,68 @@ class QueryNet_Phase(nn.Module):
         x_feat = torch.cat([x_fft.real, x_fft.imag], dim=-1)
         x_feat = x_feat.reshape(batch_size, -1)
         return self.net(x_feat)
+  
+  
+try:
+    from pytorch_wavelets import DWT1D
+    WAVELET_AVAILABLE = True
+except:
+    WAVELET_AVAILABLE = False
+      
+class QueryNet_Wavelet_MS(nn.Module):
+    """
+    Multi-Scale Wavelet Gating (MSWG)
+
+    x: (B, L, V)  # V = #variables
+    输出: (B, feature_dim), 输入给 MoE Router
+    """
+
+    def __init__(self, window_len, n_var, feature_dim, wave='haar', level=3):
+        super().__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.level = level
+
+        # --- 1. Wavelet Transform ---
+        if WAVELET_AVAILABLE:
+            self.dwt = DWT1D(wave=wave, J=level, mode='symmetric')
+        else:
+            raise ImportError("Please install pytorch_wavelets: pip install pytorch_wavelets")
+
+        # 多尺度后，有 (cA3, cD3, cD2, cD1) 共 (level + 1) 个频带
+        n_bands = level + 1   # 3-level → 4 bands
+
+        # --- 2. MLP ---
+        self.mlp = nn.Sequential(
+            nn.Linear(n_bands * n_var, feature_dim * 2),
+            nn.GELU(),
+            nn.LayerNorm(feature_dim * 2),
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        """
+        x: (B, L, V)
+        """
+        B, L, V = x.shape
+
+        # 逐变量做 DWT
+        bands = []  # list of tensors, each shape (B, V)
+
+        # 对每个变量单独进行 DWT（保持通道独立）
+        for v in range(V):
+            xv = x[:, :, v].unsqueeze(1)  # (B, 1, L)
+            cA, cD_list = self.dwt(xv)    # cA: lowest freq | cD_list: high→lower freq
+
+            # cA: (B, 1, L//8), cD_list = [cD3, cD2, cD1]
+            cA_pool = torch.mean(cA, dim=-1)  # (B, 1)
+            bands.append(cA_pool)
+
+            for cD in cD_list:  # from high freq to lower freq
+                cD_pool = torch.mean(cD, dim=-1)  # (B, 1)
+                bands.append(cD_pool)
+
+        # bands: list length = V * (level + 1)，每个项是 (B,1)
+        feat = torch.cat(bands, dim=1)  # (B, V*(level+1))
+
+        return self.mlp(feat)

@@ -104,40 +104,114 @@ class OrthoLoss(nn.Module):
         # 这意味着：对自己相似度为1，对别人相似度为0 (正交)
         return F.mse_loss(gram_matrix, identity)
 
+# class LowRankOrthoLoss(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+
+#     def forward(self, bases_left, bases_right):
+#         """
+#         bases_left:  (N, L, R, V)
+#         bases_right: (N, R, L, V)
+#         """
+#         N, L, R, V = bases_left.shape
+        
+#         # 1. 计算所有对之间的内积矩阵 (Gram Matrix)
+#         # 我们需要计算 G[i, j] = sum_v (Tr( (Ui,v^T Uj,v) * (Vj,v Vi,v^T) ))
+        
+#         # 计算 U_inner: (N, N, R, R, V)
+#         # U_inner[i,j] = Ui^T * Uj
+#         U_inner = torch.einsum('ilrv, jlrv -> ijrv', bases_left, bases_left) 
+        
+#         # 计算 V_inner: (N, N, R, R, V)
+#         # V_inner[i,j] = Vj * Vi^T
+#         V_inner = torch.einsum('irlv, jrlv -> ijrv', bases_right, bases_right)
+        
+#         # 计算 Gram 矩阵: 两个 (R,R) 矩阵点乘并求和
+#         # shape: (N, N)
+#         gram_matrix = torch.einsum('ijrv, ijrv -> ij', U_inner, V_inner)
+        
+#         # 2. 归一化 (让 Diagonal 变为 1)
+#         # 这里的 gram_matrix[i,i] 就是第 i 个基的 L2 范数的平方
+#         diag = torch.diag(gram_matrix).unsqueeze(0)
+#         norm_matrix = torch.sqrt(torch.matmul(diag.T, diag) + 1e-8)
+#         gram_matrix_norm = gram_matrix / norm_matrix
+        
+#         # 3. 目标是单位矩阵
+#         identity = torch.eye(N, device=bases_left.device)
+#         return F.mse_loss(gram_matrix_norm, identity)
+    
 class LowRankOrthoLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, bases_left, bases_right):
         """
-        bases_left:  (N, L, R, V)
-        bases_right: (N, R, L, V)
+        计算低秩矩阵重构的正交性 Loss。
+        针对 (N, N) 的 Gram 矩阵计算 MSE Loss，使其逼近单位矩阵。
+        V 维度被视为独立的视图，分别计算归一化和 Loss，最后求平均。
+
+        参数:
+        bases_left:  (N, L, R, V) -> U 矩阵
+        bases_right: (N, R, L, V) -> W 矩阵
+        
+        N: 矩阵数量 (Batch Size)
+        L: 特征维度
+        R: 秩 (Rank)
+        V: 视图数量 (Views)
         """
         N, L, R, V = bases_left.shape
+        N_, R_, L_, V_ = bases_right.shape
+        assert N == N_ and R == R_ and L == L_ and V == V_, "bases_left mismatch bases_right shape"
         
-        # 1. 计算所有对之间的内积矩阵 (Gram Matrix)
-        # 我们需要计算 G[i, j] = sum_v (Tr( (Ui,v^T Uj,v) * (Vj,v Vi,v^T) ))
+        # ----------------------------------------------------------------
+        # 1. 计算 Gram 矩阵 (保留 V 维度)
+        # 目标: G[i, j, v] = < (Ui*Wi)_v, (Uj*Wj)_v >_Frobenius
+        # ----------------------------------------------------------------
         
-        # 计算 U_inner: (N, N, R, R, V)
-        # U_inner[i,j] = Ui^T * Uj
-        U_inner = torch.einsum('ilrv, jlrv -> ijrv', bases_left, bases_left) 
+        # 计算 U 部分的交叉内积
+        # U_cross[i, j, r, k, v] = (Ui_v[:, r])^T * (Uj_v[:, k])
+        # Einsum: ilrv, jlkv -> ijrkv (对 L 维度求和)
+        U_cross = torch.einsum('ilrv, jlkv -> ijrkv', bases_left, bases_left)
         
-        # 计算 V_inner: (N, N, R, R, V)
-        # V_inner[i,j] = Vj * Vi^T
-        V_inner = torch.einsum('irlv, jrlv -> ijrv', bases_right, bases_right)
+        # 计算 W 部分的交叉内积
+        # W_cross[i, j, r, k, v] = (Wi_v[r, :]) * (Wj_v[k, :])^T
+        # Einsum: irlv, jklv -> ijrkv (对 L 维度求和)
+        V_cross = torch.einsum('irlv, jklv -> ijrkv', bases_right, bases_right)
         
-        # 计算 Gram 矩阵: 两个 (R,R) 矩阵点乘并求和
-        # shape: (N, N)
-        gram_matrix = torch.einsum('ijrv, ijrv -> ij', U_inner, V_inner)
+        # 组合得到 Gram 矩阵
+        # 根据内积性质，我们需要对所有 Rank 组合 (r, k) 进行求和
+        # output shape: (N, N, V)
+        gram_matrix = torch.einsum('ijrkv, ijrkv -> ijv', U_cross, V_cross)
         
-        # 2. 归一化 (让 Diagonal 变为 1)
-        # 这里的 gram_matrix[i,i] 就是第 i 个基的 L2 范数的平方
-        diag = torch.diag(gram_matrix).unsqueeze(0)
-        norm_matrix = torch.sqrt(torch.matmul(diag.T, diag) + 1e-8)
-        gram_matrix_norm = gram_matrix / norm_matrix
+        # ----------------------------------------------------------------
+        # 2. 归一化 (针对每个 View 单独进行)
+        # ----------------------------------------------------------------
         
-        # 3. 目标是单位矩阵
-        identity = torch.eye(N, device=bases_left.device)
+        # 提取对角线元素 (即每个矩阵自身的 L2 范数平方)
+        # shape: (N, V)
+        diag_elements = torch.einsum('iiv -> iv', gram_matrix)
+        
+        # 计算模长 sqrt(gram[i,i])
+        norms = torch.sqrt(diag_elements + 1e-8)
+        
+        # 构建分母矩阵 denominator[i, j, v] = norms[i, v] * norms[j, v]
+        # 利用广播: (N, 1, V) * (1, N, V) -> (N, N, V)
+        denominator = norms.unsqueeze(1) * norms.unsqueeze(0)
+        
+        # 归一化得到余弦相似度矩阵 / Correlation Matrix
+        gram_matrix_norm = gram_matrix / (denominator + 1e-8)
+        
+        # ----------------------------------------------------------------
+        # 3. 计算 Loss
+        # ----------------------------------------------------------------
+        
+        # 目标是单位矩阵 (N, N)
+        # 我们将其扩展为 (N, N, 1) 以便与 (N, N, V) 进行广播
+        identity = torch.eye(N, device=bases_left.device).unsqueeze(-1)
+        
+        # 计算 MSE Loss
+        # F.mse_loss 默认是 'mean' reduction，会把 (N, N, V) 所有元素求平均
+        # 这符合 "V 里面的每个单独算一个 loss，然后平均起来" 的需求
         return F.mse_loss(gram_matrix_norm, identity)
     
 class CoBA_Loss(nn.Module):
