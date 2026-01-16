@@ -18,15 +18,11 @@ from config import get_norm_method
 import math
 from tta.utils import save_tta_results
 from device_manager import global_device
-<<<<<<< HEAD
 from tta.loss import stable_complex_abs, huber_loss
-=======
-from tta.loss import stable_complex_abs
 
 import time
 from tta.tta_dual_utils.performance import record_performance, synchronize_device
 
->>>>>>> master
 
 class CorrCoefLoss(nn.Module):
 
