@@ -50,6 +50,13 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
+    elif model_type == 'lowrank-coba-GCM' or model_type == 'coba-online-only':
+        coba_params = {
+            'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
+            'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
+            'query_type': cfg.TTA.DUAL.QUERY_TYPE,
+        }
+        params.update(coba_params)
     elif model_type == 'identity':
         return CalibrationContainer(None, None)
 
@@ -84,8 +91,8 @@ def build_loss_fn(cfg) -> nn.Module:
 def get_optimizer(optim_params, cfg):
         return torch.optim.Adam(
             optim_params,
-            lr=cfg.DUAL.LR,
-            weight_decay=cfg.DUAL.WEIGHT_DECAY
+            lr=cfg.SOLVER.BASE_LR,
+            weight_decay=cfg.SOLVER.WEIGHT_DECAY
         )
 
 class Adapter(nn.Module):
@@ -128,21 +135,33 @@ class Adapter(nn.Module):
         input_enable = getattr(self.cfg.TTA.DUAL, 'CALI_INPUT_ENABLE', False)
         output_enable = getattr(self.cfg.TTA.DUAL, 'CALI_OUTPUT_ENABLE', False)
 
-        parts = [
-            f'dual-cali-{cali_name}',
-            f'loss-{loss_name}'
-        ]
+        # parts = [
+        #     f'dual-cali-{cali_name}',
+        #     f'loss-{loss_name}'
+        # ]
 
-        if input_enable:
-            parts.append("in")
-        if output_enable:
-            parts.append("out")
-        if isinstance(self.cali.out_cali, CoBA_online_only):
+        # if input_enable:
+        #     parts.append("in")
+        # if output_enable:
+        #     parts.append("out")
+        # if isinstance(self.cali.out_cali, CoBA_online_only):
+        #     parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+            # if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            #     parts.append('out-adapter')
+        # if isinstance(self.loss_fn, LowRankCoBALoss):
+        #     parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
+
+        parts = []
+        if self.cfg.TTA.DUAL.CALI_NAME == 'coba-online-only':
+            parts.append("coba-online-only")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-            if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-                parts.append('out-adapter')
-        if isinstance(self.loss_fn, LowRankCoBALoss):
-            parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
+        elif self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        else:
+            parts.append("coba-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         self.save_name = "-".join(parts)
         self.mse_all = []

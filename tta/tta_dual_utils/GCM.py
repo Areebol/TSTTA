@@ -14,7 +14,7 @@ from device_manager import global_device
 from tta.tta_dual_utils.query_net import *
 
 class tafas_GCM(nn.Module):
-    def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True):
+    def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True, **args):
         super(tafas_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -171,7 +171,7 @@ class CoBA_GCM(nn.Module):
 class CoBA_low_rank_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-base-CI'):
+                 n_bases=8, feature_dim=32, query_type='freq-base-CD'):
         super(CoBA_low_rank_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -189,7 +189,17 @@ class CoBA_low_rank_GCM(nn.Module):
             self.bases_left = nn.Parameter(torch.Tensor(n_bases, window_len, self.rank))
             self.bases_right = nn.Parameter(torch.Tensor(n_bases, self.rank, window_len))
             self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
-        nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
+        # Initialize bases_left with column-wise orthogonality
+        with torch.no_grad():
+            if var_wise:
+                for n in range(n_bases):
+                    for v in range(n_var):
+                        nn.init.orthogonal_(self.bases_left[n, :, :, v])
+            else:
+                for n in range(n_bases):
+                    nn.init.orthogonal_(self.bases_left[n, :, :])
+        
+        # nn.init.kaiming_uniform_(self.bases_left, a=math.sqrt(5))
         nn.init.zeros_(self.bases_right)
         
         # --- Query Net Selection Logic (Factory) ---
@@ -217,8 +227,8 @@ class CoBA_low_rank_GCM(nn.Module):
         else:
             raise ValueError(f"Unknown query_type: {query_type}")
 
-        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
-        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+        # self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+        # self.bias = nn.Parameter(torch.zeros(window_len, n_var))
 
         if var_wise:
             self.tafas_weight = nn.Parameter(torch.Tensor(window_len, window_len, n_var))
@@ -249,7 +259,7 @@ class CoBA_low_rank_GCM(nn.Module):
         # print(similarity.shape)
         
         # --- 替换为 Top-K 逻辑 ---
-        k = 6 
+        k = 2 
         
         # 1. 找出分数最高的 k 个值的索引和数值
         topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
@@ -284,8 +294,8 @@ class CoBA_low_rank_GCM(nn.Module):
             # result shape: (Batch, Output_len, Var)
             feat_trans = torch.einsum('brv, blrv -> blv', x_reduced, u)
             
-            # 加上 bias
-            feat_trans = feat_trans + self.bias
+            # # 加上 bias
+            # feat_trans = feat_trans + self.bias
         else:
             u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
             v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
@@ -300,7 +310,7 @@ class CoBA_low_rank_GCM(nn.Module):
             # output: (B, L, V)
             feat_trans = torch.einsum('brv, bli -> blv', x_reduced, u)
             
-            feat_trans = feat_trans + self.bias
+            # feat_trans = feat_trans + self.bias
 
         if self.online_mode:
             if self.var_wise:
@@ -331,7 +341,7 @@ class CoBA_low_rank_GCM(nn.Module):
             params.append(self.tafas_weight)
             params.append(self.tafas_bias)
             params.append(self.tafas_gating)
-            # params.extend(list(self.query_net.parameters()))
+            params.extend(list(self.query_net.parameters()))
             # params.append(self.bias)
         else:
             params.append(self.tafas_bias)
