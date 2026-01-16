@@ -349,8 +349,6 @@ class CoBA_low_rank_GCM(nn.Module):
             self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
         elif query_type == 'freq-base':
             self.query_net = QueryNet_Freq_Base(window_len, n_var, feature_dim)
-        elif query_type == 'var-base':
-            self.query_net = QueryNet_Var_Base(window_len, n_var, feature_dim)
         elif query_type == 'fusion':
             self.query_net = QueryNet_Fusion_Gated(window_len, n_var, feature_dim)
         elif query_type == 'multiscale':

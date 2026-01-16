@@ -80,8 +80,8 @@ def build_loss_fn(cfg) -> nn.Module:
 def get_optimizer(optim_params, cfg):
         return torch.optim.Adam(
             optim_params,
-            lr=cfg.SOLVER.BASE_LR,
-            weight_decay=cfg.SOLVER.WEIGHT_DECAY
+            lr=cfg.TTA.DUAL.LR,
+            weight_decay=cfg.TTA.DUAL.WEIGHT_DECAY
         )
 
 class Adapter(nn.Module):
