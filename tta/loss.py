@@ -298,3 +298,76 @@ def build_loss_fn(cfg, loss_name='MSE') -> nn.Module:
         return LowRankCoBALoss(lambda_ortho=0.01)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
+
+
+class FreqLowRankOrthoLoss(nn.Module):
+    """
+    Frequency Domain Orthogonality Loss.
+    
+    Since the GCM bases in the frequency domain are complex numbers split into 
+    Real and Imaginary parts, this loss applies the orthogonality constraint 
+    separately to both the real-part bases and the imaginary-part bases.
+    
+    Input:
+        Real: (bases_left, bases_right)
+        Imag: (bases_left, bases_right)
+    """
+    def __init__(self):
+        super().__init__()
+        # Reuse the existing spatial/time domain low-rank ortho loss
+        self.ortho_loss = LowRankOrthoLoss()
+
+    def forward(self, real_left, real_right, imag_left, imag_right):
+        """
+        Args:
+            real_left  (Tensor): (N, L, R, V) Real part of U matrix
+            real_right (Tensor): (N, R, L, V) Real part of W matrix
+            imag_left  (Tensor): (N, L, R, V) Imaginary part of U matrix
+            imag_right (Tensor): (N, R, L, V) Imaginary part of W matrix
+            
+        Returns:
+            Tensor: Sum of orthogonality losses for real and imaginary parts.
+        """
+        loss_real = self.ortho_loss(real_left, real_right)
+        loss_imag = self.ortho_loss(imag_left, imag_right)
+        
+        return loss_real + loss_imag
+
+
+class FreqLowRankCoBALoss(nn.Module):
+    """
+    Frequency Domain CoBA Loss.
+    Combines a reconstruction task loss (e.g., MSE) with the Frequency Domain 
+    Low-Rank Orthogonality regularization.
+    """
+    def __init__(self, lambda_ortho=0.01, task_loss_fn=None):
+        super().__init__()
+        
+        # Default to StandardMSELoss if no specific task loss is provided
+        self.task_loss_fn = task_loss_fn if task_loss_fn else StandardMSELoss()
+        self.ortho_loss_fn = FreqLowRankOrthoLoss()
+        self.lambda_ortho = lambda_ortho
+ 
+    def forward(self, pred, ground_truth, real_left, real_right, imag_left, imag_right, coeffs=None):
+        """
+        Args:
+            pred (Tensor): Model predictions
+            ground_truth (Tensor): Target values
+            real_left, real_right: Real part bases decomposition
+            imag_left, imag_right: Imaginary part bases decomposition
+            coeffs (Tensor, optional): Coefficients (unused in this specific loss logic but kept for interface consistency)
+        """
+        
+        # 1. Task Loss
+        l_task = self.task_loss_fn(pred, ground_truth)
+        if torch.isnan(l_task):
+            raise ValueError("NaN detected in task loss")
+            
+        # 2. Frequency Ortho Loss (Real + Imag)
+        l_ortho = self.ortho_loss_fn(real_left, real_right, imag_left, imag_right)
+        if torch.isnan(l_ortho):
+            raise ValueError("NaN detected in ortho loss")
+        
+        l_total = l_task + (self.lambda_ortho * l_ortho)
+        
+        return l_total

@@ -777,11 +777,11 @@ class CalibrationContainer(nn.Module):
         return outputs
 
 
-class CoBA_low_rank_FreAadapter(nn.Module):
+class CoBA_low_rank_FreqAdapter(nn.Module):
     def __init__(self, window_len, n_var=1, low_ranks=64, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
                  n_bases=8, feature_dim=32, query_type='freq-base-CI'):
-        super(CoBA_low_rank_FreAadapter, self).__init__()
+        super(CoBA_low_rank_FreqAdapter, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
         self.var_wise = var_wise
@@ -1027,18 +1027,18 @@ class CoBA_FreqDomain_GCM(nn.Module):
         
         if var_wise:
             # Down Projection Bases: (N_bases, Freq_in, Rank, N_var)
-            self.bases_down_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank, n_var))
-            self.bases_down_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank, n_var))
+            self.bases_left_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank, n_var))
+            self.bases_left_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank, n_var))
             
             # Up Projection Bases: (N_bases, Rank, Freq_out, N_var)
-            self.bases_up_r = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len, n_var))
-            self.bases_up_i = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len, n_var))
+            self.bases_right_r = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len, n_var))
+            self.bases_right_i = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len, n_var))
         else:
             # Shared across variables
-            self.bases_down_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank))
-            self.bases_down_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank))
-            self.bases_up_r = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len))
-            self.bases_up_i = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len))
+            self.bases_left_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank))
+            self.bases_left_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, self.rank))
+            self.bases_right_r = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len))
+            self.bases_right_i = nn.Parameter(torch.Tensor(n_bases, self.rank, self.freq_len))
 
         # Initialization
         self._init_bases()
@@ -1079,15 +1079,15 @@ class CoBA_FreqDomain_GCM(nn.Module):
             if self.var_wise:
                 for n in range(self.n_bases):
                     for v in range(self.n_var):
-                        nn.init.orthogonal_(self.bases_down_r[n, :, :, v])
-                        nn.init.orthogonal_(self.bases_down_i[n, :, :, v])
+                        nn.init.orthogonal_(self.bases_left_r[n, :, :, v])
+                        nn.init.orthogonal_(self.bases_left_i[n, :, :, v])
             else:
                 for n in range(self.n_bases):
-                    nn.init.orthogonal_(self.bases_down_r[n])
-                    nn.init.orthogonal_(self.bases_down_i[n])
+                    nn.init.orthogonal_(self.bases_left_r[n])
+                    nn.init.orthogonal_(self.bases_left_i[n])
             # Zero init for Up projection to start with identity-like behavior or zero residual
-            nn.init.zeros_(self.bases_up_r)
-            nn.init.zeros_(self.bases_up_i)
+            nn.init.zeros_(self.bases_right_r)
+            nn.init.zeros_(self.bases_right_i)
 
     def _get_query(self, x):
         return self.query_net(x)
@@ -1105,20 +1105,20 @@ class CoBA_FreqDomain_GCM(nn.Module):
         
         if self.var_wise:
             # coeffs: bvn, bases: nfrv -> bfrv
-            w_down_r = torch.einsum('bvn, nfrv -> bfrv', coeffs, self.bases_down_r)
-            w_down_i = torch.einsum('bvn, nfrv -> bfrv', coeffs, self.bases_down_i)
+            w_left_r = torch.einsum('bvn, nfrv -> bfrv', coeffs, self.bases_left_r)
+            w_left_i = torch.einsum('bvn, nfrv -> bfrv', coeffs, self.bases_left_i)
             
             # coeffs: bvn, bases: nrfv -> brfv
-            w_up_r = torch.einsum('bvn, nrfv -> brfv', coeffs, self.bases_up_r)
-            w_up_i = torch.einsum('bvn, nrfv -> brfv', coeffs, self.bases_up_i)
+            w_right_r = torch.einsum('bvn, nrfv -> brfv', coeffs, self.bases_right_r)
+            w_right_i = torch.einsum('bvn, nrfv -> brfv', coeffs, self.bases_right_i)
         else:
              # coeffs: bn (mean over V internally or broadcasted), bases: nfr -> bfr
              # Handle simplest case where coeffs might be (B, N)
              pass 
              # (Omitting non-var-wise complex logic for brevity, assuming var-wise=True per prompts)
 
-        # 2. Complex Matrix Multiplication Stage 1 (Down Projection)
-        # X (B, F, V) @ W_down (B, F, R, V) -> Z (B, R, V)
+        # 2. Complex Matrix Multiplication Stage 1 (Left Projection)
+        # X (B, F, V) @ W_left (B, F, R, V) -> Z (B, R, V)
         # Note: This is an element-wise matrix mul per batch/var structure
         # Indices: b=batch, f=freq_in, r=rank, v=var
         xr, xi = x_fft.real, x_fft.imag # (B, F, V)
@@ -1126,19 +1126,19 @@ class CoBA_FreqDomain_GCM(nn.Module):
         # Z_real = Xr * Wr - Xi * Wi
         # Z_imag = Xr * Wi + Xi * Wr
         # Einstein sum: bfv, bfrv -> brv
-        z_r = torch.einsum('bfv, bfrv -> brv', xr, w_down_r) - \
-              torch.einsum('bfv, bfrv -> brv', xi, w_down_i)
-        z_i = torch.einsum('bfv, bfrv -> brv', xr, w_down_i) + \
-              torch.einsum('bfv, bfrv -> brv', xi, w_down_r)
+        z_r = torch.einsum('bfv, bfrv -> brv', xr, w_left_r) - \
+              torch.einsum('bfv, bfrv -> brv', xi, w_left_i)
+        z_i = torch.einsum('bfv, bfrv -> brv', xr, w_left_i) + \
+              torch.einsum('bfv, bfrv -> brv', xi, w_left_r)
         
-        # 3. Complex Matrix Multiplication Stage 2 (Up Projection)
-        # Z (B, R, V) @ W_up (B, R, F, V) -> Y (B, F, V)
+        # 3. Complex Matrix Multiplication Stage 2 (Right Projection)
+        # Z (B, R, V) @ W_right (B, R, F, V) -> Y (B, F, V)
         # Indices: b=batch, r=rank, f=freq_out, v=var
         
-        y_r = torch.einsum('brv, brfv -> bfv', z_r, w_up_r) - \
-              torch.einsum('brv, brfv -> bfv', z_i, w_up_i)
-        y_i = torch.einsum('brv, brfv -> bfv', z_r, w_up_i) + \
-              torch.einsum('brv, brfv -> bfv', z_i, w_up_r)
+        y_r = torch.einsum('brv, brfv -> bfv', z_r, w_right_r) - \
+              torch.einsum('brv, brfv -> bfv', z_i, w_right_i)
+        y_i = torch.einsum('brv, brfv -> bfv', z_r, w_right_i) + \
+              torch.einsum('brv, brfv -> bfv', z_i, w_right_r)
               
         return torch.complex(y_r, y_i)
 
