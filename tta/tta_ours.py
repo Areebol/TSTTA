@@ -377,11 +377,6 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         params.update(coba_params)
     elif model_type == 'identity':
         return CalibrationContainer(None, None)
-    elif model_type == 'aux-GCM':
-        aux_params = {
-        }
-        params.update(aux_params)
-        
     ModelClass = constructors.get(model_type)
     if not ModelClass:
         raise ValueError(f"Unknown adapter type: {model_type}")
@@ -443,7 +438,7 @@ class Adapter(nn.Module):
             self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
         else:
             self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
-        self.tta_train_loader = get_tta_train_dataloader(cfg)
+        self.tta_train_loader = get_tta_train_dataloader(cfg, batch_size=cfg.TRAIN.BATCH_SIZE)
         self.tta_train_data = self.tta_train_loader.dataset.train
         
         self.cur_step = cfg.DATA.SEQ_LEN - 2
@@ -618,8 +613,7 @@ class Adapter(nn.Module):
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
             pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
-            # self.cali.out_cali.analyzer.record_batch()
-            
+        
         for i in range(batch_size-1):
             pred[i, period-i:] = pred_after_adapt[i, period-i:]
         return pred, ground_truth
@@ -629,6 +623,7 @@ class Adapter(nn.Module):
         self.mae_all = np.concatenate(self.mae_all)
         self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
+        
         dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method=self.save_name,
@@ -639,23 +634,13 @@ class Adapter(nn.Module):
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
         )
-        
-        import wandb
-        if wandb.run is not None:
-            wandb.log({"tta/mse": self.mse_all.mean(), "tta/mae": self.mae_all.mean()})
-            
-        full_data = self.data_manager.get_full_data()
-        # if full_data:
-        #     self.visualizer.plot_all(full_data)
         self.model.eval()
         # self.cali.out_cali.analyzer.plot_stats()
         # self.cali.out_cali.analyzer.plot_evolution()
         print("Final TTA Results:")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
-        # self.cali.out_cali.analyzer.analyze_sequence()
     
     def adapt(self):
-        self.data_manager.reset()
         if getattr(self, "is_eved_like", False):
             self._adapt_eved()
         else:
@@ -698,15 +683,12 @@ class Adapter(nn.Module):
             
             self._adapt_with_full_ground_truth_if_available()
             pred, ground_truth = self._adapt_with_partial_ground_truth(inputs, period, batch_size, batch_idx)
-            base_pred = pred.clone().detach()
+
             if self.cfg.TTA.DUAL.ADJUST_PRED:
                 pred, ground_truth = self._adjust_prediction(pred, inputs, batch_size, period)
-            if hasattr(self.cali.out_cali, 'analyzer'):
-                self.cali.out_cali.analyzer.record_batch()
-            if self.cali.output_calibration is not None:
-                pred = self.cali.output_calibration(pred)
-            tta_pred = pred.clone().detach()
-            assert torch.isnan(pred).sum() == 0, f"NaN detected in predictions at step {self.cur_step}"
+            # if self.cali.output_calibration is not None:
+            #     pred = self.cali.output_calibration(pred)
+            # tta_pred = pred.clone().detach()
             mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
             mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
@@ -715,13 +697,6 @@ class Adapter(nn.Module):
             self.mse_per_var_all.append(mse_per_var)
             batch_start = batch_end
             batch_idx += 1
-            self.data_manager.collect(
-                inputs=inputs[0],
-                base_pred=base_pred,
-                tta_pred=tta_pred,
-                gt=ground_truth,      
-                mse=mse         
-            )
                 
         assert self.cur_step == len(self.test_data) - self.cfg.DATA.PRED_LEN - 1
         self._report()
@@ -806,95 +781,3 @@ class Adapter(nn.Module):
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
-
-def visualize_bases_interpretation(model, window_len, var_idx=0):
-    """
-    可视化解释 CoBA_GCM 的 Bases (多信号综合分析版)
-    """
-    model.eval()
-    n_bases = model.n_bases
-    
-    # 1. 提取 Bases 权重
-    bases = model.bases.detach().cpu()
-    if model.var_wise:
-        bases = bases[..., var_idx] # (N, L, L)
-    
-    # 2. 准备三种探测信号
-    t = torch.linspace(0, 1, window_len)
-    
-    # (A) 脉冲信号: 位于中间，看冲击响应
-    sig_impulse = torch.zeros(window_len)
-    sig_impulse[window_len // 2] = 1.0
-    
-    # (B) 阶跃信号: 在 1/4 处跳变，看对趋势突变的处理
-    sig_step = torch.zeros(window_len)
-    sig_step[window_len // 4:] = 1.0 
-    
-    # (C) 混频信号: 低频正弦 + 高频噪音，看滤波特性
-    # 低频: 2个周期, 高频: 20个周期
-    sig_freq = torch.sin(2 * np.pi * 2 * t) + 0.3 * torch.sin(2 * np.pi * 20 * t)
-
-    # 放到字典里方便循环
-    signals = {
-        "Impulse": sig_impulse,
-        "Step": sig_step,
-        "Freq Mix": sig_freq
-    }
-    
-    # ==========================================
-    # 3. 开始绘图 (Rows: Matrix + 3 Signals)
-    # ==========================================
-    rows = 1 + len(signals) # Matrix + 3 signals
-    fig, axes = plt.subplots(rows, n_bases, figsize=(3 * n_bases, 2.5 * rows), sharex=False)
-    
-    # 设置总标题
-    plt.suptitle(f"Multi-View Analysis of {n_bases} Bases (Variable {var_idx})", fontsize=16, y=0.98)
-    
-    # --- Row 0: 矩阵热力图 ---
-    for i in range(n_bases):
-        ax = axes[0, i]
-        im = ax.imshow(bases[i], cmap='RdBu_r', interpolation='nearest')
-        ax.set_title(f"Base {i} Matrix", fontsize=11, fontweight='bold')
-        ax.axis('off')
-
-    # --- Row 1~3: 信号响应 ---
-    # 遍历每一种信号类型
-    for row_idx, (sig_name, input_sig) in enumerate(signals.items(), start=1):
-        
-        # 统一 Y 轴范围 (可选，根据数据情况调整，设为 None 则自适应)
-        y_max = None 
-        
-        for i in range(n_bases):
-            ax = axes[row_idx, i]
-            
-            # 准备数据
-            base_weight = bases[i] # (L, L)
-            # 计算响应: input(L) @ Weight(L, L) -> output(L)
-            response = torch.einsum('i, oi -> o', input_sig, base_weight)
-            
-            # 绘图
-            ax.plot(input_sig.numpy(), color='gray', linestyle='--', alpha=0.4, linewidth=1, label='In')
-            ax.plot(response.numpy(), color='#d62728', linewidth=1.5, label='Out') # Tab:red
-            
-            # 辅助线
-            ax.axhline(0, color='black', linewidth=0.5, alpha=0.2)
-            
-            # 仅在第一列显示 Y 轴标签（作为行标题）
-            if i == 0:
-                ax.set_ylabel(f"{sig_name}\nResponse", fontsize=10, fontweight='bold')
-                # 在左上角显示图例
-                ax.legend(loc='upper left', fontsize=7, frameon=False)
-            
-            # 去除多余的刻度，保持整洁
-            if row_idx < rows - 1:
-                ax.set_xticks([])
-            
-            ax.grid(True, alpha=0.15)
-            
-            # 标题仅在第一行热力图显示，这里可以显示一些统计信息，或者留空
-            # ax.set_title(f"Mean: {response.mean():.2f}", fontsize=8)
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92) # 留出标题空间
-    plt.savefig("coba_bases_multi_view.png", dpi=300)
-    # plt.show()
