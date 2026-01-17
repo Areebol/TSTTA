@@ -1049,13 +1049,12 @@ class CoBA_FreqDomain_GCM(nn.Module):
 
         # --- 2. Online Mode Parameters (Matrix Freq Adapter) ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
-        self.online_scale = 0.02
+        self.scale = 1e-5
         self.sparsity_threshold = 0.01
 
-        # Online Matrix Parameters: (N_var, Freq_len, Freq_len)
-        # Allows full interaction between frequencies per variable
-        self.online_freq_r = nn.Parameter(torch.zeros(n_var, self.freq_len, self.freq_len))
-        self.online_freq_i = nn.Parameter(torch.zeros(n_var, self.freq_len, self.freq_len))
+        # Online Matrix Parameters: (N_var, Freq_len, Freq_len) -> Modified to Element-wise (1, Freq_len, N_var)
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
         self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -1166,28 +1165,17 @@ class CoBA_FreqDomain_GCM(nn.Module):
 
         # 4. Online Path: Matrix-based Frequency Calibration
         if self.online_mode:
-            real = x_fft.real
-            imag = x_fft.imag
-            
-            # Full Matrix Complex Mul: (R + iI) * (Wr + iWi)
-            # Input: bfv (Batch, Freq_in, Var)
-            # Weights: vfk (Var, Freq_in, Freq_out) -> vfk
-            
-            # (R * Wr)
-            r_wr = torch.einsum('bfv, vfk -> bkv', real, self.online_freq_r)
-            # (I * Wi)
-            i_wi = torch.einsum('bfv, vfk -> bkv', imag, self.online_freq_i)
-            # (R * Wi)
-            r_wi = torch.einsum('bfv, vfk -> bkv', real, self.online_freq_i)
-            # (I * Wr)
-            i_wr = torch.einsum('bfv, vfk -> bkv', imag, self.online_freq_r)
-            
-            delta_real_online = r_wr - i_wi + self.online_bias_r
-            delta_imag_online = r_wi + i_wr + self.online_bias_i
+            # Modified to match CoBA_low_rank_FreqAdapter calculation logic (Element-wise)
+            delta_real_online = (
+                x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i
+            )
             
             # Softshrink (Sparsity)
             y_stack = torch.stack([delta_real_online, delta_imag_online], dim=-1)
-            y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
+            # y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
             y_online = torch.view_as_complex(y_stack)
             
             # iFFT Online
