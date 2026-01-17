@@ -1,5 +1,5 @@
 #!/bin/bash
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -14,18 +14,18 @@ MODELS=("DLinear")
 DATASETS=("ETTm2")
 TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(96)
+PRED_LENS=(96)
 # LRS=(0.5 0.3 0.1 0.08)
-# LRS=(0.003)
-# ADAPTERS=("linear")
+
 # LRS=(0.001)
-# LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
-# LRS=(0.005 0.003 0.001)
-# ADAPTERS=("complex-freq")
-ADAPTERS=("freri")
-# ADAPTERS=("polar-freq")
-LRS=(0.1 0.05 0.03 0.01 0.005 0.003 0.001 0.0001)
-# LRS=(0.0005 0.0001)
+# LRS=(0.01 0.005 0.003 0.001 0.0005 0.0001)
+# LRS=(1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
+# LRS=(5e-3 3e-3 1e-3)
+# LRS=(0.1 0.05 0.03 0.01)
+LRS=(0.05 0.03 0.01)
+LRS=(0.03)
+# LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
+LAMBDA_ORTHO=(1e-2)
 
 parallel --lb -j ${TOTAL_JOBS} '
   npu_array=($NPU_STR)
@@ -42,7 +42,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   PRED_LEN={3}
   TARGET={4}
   LR={5}
-  ADAPTER={6}
+  LAMBDA_ORTHO={6}
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/output_tta/"
@@ -60,19 +60,21 @@ parallel --lb -j ${TOTAL_JOBS} '
     TEST.ENABLE False \
     TTA.ENABLE True \
     TTA.DOMAIN_SHIFT True \
-    TTA.METHOD 'Output' \
-    TTA.OURS.LR ${LR} \
-    TTA.OURS.STEPS_PER_BATCH 1 \
-    TTA.OURS.BATCH_SIZE 64 \
-    TTA.OURS.GATING.INIT 0.01 \
-    TTA.OURS.GATING_LR_SCALE 1 \
-    TTA.OURS.PAAS True \
-    TTA.OURS.ADJUST_PRED True \
-    TTA.OURS.RESET False \
-    TTA.DUAL.LOSS_NAME 'MSE' \
-    TTA.OURS.ADAPTER.NAME ${ADAPTER} \
-    TTA.OURS.GATING.NAME 'tanh' \
+    TTA.METHOD 'Dual-tta' \
+    TTA.DUAL.BATCH_SIZE 64 \
+    TTA.DUAL.GATING_INIT 0.01 \
+    TTA.SOLVER.BASE_LR 1e-4 \
+    TTA.DUAL.PAAS True \
+    TTA.DUAL.ADJUST_PRED True \
+    TTA.DUAL.CALI_NAME CoBA-low-rank-FreqAdapter \
+    TTA.DUAL.LOSS_NAME LOWRANK-COBA \
+    TTA.DUAL.QUERY_TYPE "freq-base-CI" \
+    TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
+    TTA.DUAL.COBA_ONLINE_LR ${LR} \
+    TTA.DUAL.CALI_INPUT_ENABLE False \
+    TTA.DUAL.CALI_OUTPUT_ENABLE True \
+    TTA.DUAL.COBA_ONLINE_ENABLED True \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${ADAPTERS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}"

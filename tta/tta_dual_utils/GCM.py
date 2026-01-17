@@ -295,7 +295,7 @@ class CoBA_low_rank_GCM(nn.Module):
             feat_trans = torch.einsum('brv, blrv -> blv', x_reduced, u)
             
             # # 加上 bias
-            feat_trans = feat_trans + self.bias
+            # feat_trans = feat_trans + self.bias
         else:
             u = torch.einsum('bn, nli -> bli', coeffs, self.bases_left)   # (B, L, R)
             v = torch.einsum('bn, nri -> bri', coeffs, self.bases_right)  # (B, R, L)
@@ -492,7 +492,7 @@ class CoBA_online_only(nn.Module):
             # output: (B, L, V)
             feat_trans = torch.einsum('brv, bli -> blv', x_reduced, u)
             
-            feat_trans = feat_trans + self.bias
+            # feat_trans = feat_trans + self.bias
 
         if self.online_mode:
             if self.var_wise:
@@ -503,20 +503,19 @@ class CoBA_online_only(nn.Module):
         else:
             out = x + feat_trans
         
-        self.coeffs = torch.zeros(batch_size, self.n_var, self.n_bases, device=x.device)
+        self.coeffs = coeffs
+
         return out
 
     def get_optim_params(self):
         params = []
         if self.online_mode:
-            params.append(self.gating)
             params.append(self.tafas_weight)
-            params.append(self.tafas_gating)
             params.append(self.tafas_bias)
-        params.extend(list(self.query_net.parameters()))
-        params.append(self.bases_left)
-        params.append(self.bases_right)
-        params.append(self.bias)
+            params.append(self.tafas_gating)
+            params.extend(list(self.query_net.parameters()))
+        else:
+            params.append(self.tafas_bias)
         return params
 
 class Auxiliary_GCM(nn.Module):
@@ -841,14 +840,14 @@ class CoBA_low_rank_FreqAdapter(nn.Module):
 
         # Frequency Domain Adapter Parameters (per variable)
         self.freq_len = window_len // 2 + 1
-        self.scale = 0
+        self.scale = 1e-5
         self.sparsity_threshold = 0.01
         
         # Parameters for real and imaginary parts
         # Dim: (1, freq_len, n_var) for broadcasting over batch
-        # 这里使用 (n_var, freq_len, freq_len) 
-        self.freq_r = nn.Parameter(torch.zeros(n_var, self.freq_len, self.freq_len))
-        self.freq_i = nn.Parameter(torch.zeros(n_var, self.freq_len, self.freq_len))
+        # Element-wise multiplication
+        self.freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         
         # Bias 保持向量形式 (1, freq_len, n_var) 用于广播
         self.freq_rb = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -935,31 +934,19 @@ class CoBA_low_rank_FreqAdapter(nn.Module):
             # FFT with ortho norm (Energy preserving)
             x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  # (B, F, D)
 
-            real = x_fft.real
-            imag = x_fft.imag
-            
-            # Linear Complex Transform (per variable due to parameter shape)
+            # Linear Complex Transform (element-wise)
             # Delta_real = R*r - I*i + rb
             # Delta_imag = I*r + R*i + ib
-            # Note: self.freq_r shape is (1, F, D), broadcasting over B
-            # 复数矩阵乘法: (R + iI) * (Wr + iWi) = (R*Wr - I*Wi) + i(R*Wi + I*Wr)
-            # 使用 einsum 针对每个 Var 单独处理频谱的线性变换
-            
-            # (R * Wr)
-            r_wr = torch.einsum('bfv, vfk -> bkv', real, self.freq_r)
-            # (I * Wi)
-            i_wi = torch.einsum('bfv, vfk -> bkv', imag, self.freq_i)
-            # (R * Wi)
-            r_wi = torch.einsum('bfv, vfk -> bkv', real, self.freq_i)
-            # (I * Wr)
-            i_wr = torch.einsum('bfv, vfk -> bkv', imag, self.freq_r)
-            
-            delta_real = r_wr - i_wi + self.freq_rb
-            delta_imag = r_wi + i_wr + self.freq_ib
+            delta_real = (
+                x_fft.real * self.freq_r - x_fft.imag * self.freq_i + self.freq_rb
+            )
+            delta_imag = (
+                x_fft.imag * self.freq_r + x_fft.real * self.freq_i + self.freq_ib
+            )
             
             # Combine and softshrink (Sparsity on Residual)
             y_stack = torch.stack([delta_real, delta_imag], dim=-1)
-            y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
+            # y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
             y = torch.view_as_complex(y_stack)
             
             # iFFT with ortho norm
@@ -1100,8 +1087,8 @@ class CoBA_FreqDomain_GCM(nn.Module):
         """
         # 1. Aggregate Bases based on coefficients
         # Expected aggregated shape needed for einsum: 
-        # Down: (B, F_in, Rank, V)
-        # Up:   (B, Rank, F_out, V)
+        # Down: (B, Freq_in, Rank, V)
+        # Up:   (B, Rank, Freq_out, V)
         
         if self.var_wise:
             # coeffs: bvn, bases: nfrv -> bfrv

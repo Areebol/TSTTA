@@ -89,12 +89,14 @@ class ComplexFreqAdapter(BaseAdapter):
     def __init__(self, pred_len: int, n_vars: int):
         super().__init__(pred_len, n_vars)
         self.freq_len = pred_len // 2 + 1
-        self.scale = 0.02
+        self.scale = 1e-5
         
         # Parameters for real and imaginary parts
         # r/i: weights, rb/ib: biases
         self.r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_vars))
         self.i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_vars))
+        # self.r = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        # self.i = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
         self.rb = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
         self.ib = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
         
@@ -119,7 +121,7 @@ class ComplexFreqAdapter(BaseAdapter):
         
         # Combine and softshrink (Sparsity on Residual)
         y_stack = torch.stack([delta_real, delta_imag], dim=-1)
-        y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
+        # y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
         y = torch.view_as_complex(y_stack)
         
         # iFFT with ortho norm
@@ -127,6 +129,138 @@ class ComplexFreqAdapter(BaseAdapter):
         delta = torch.fft.irfft(y, n=L, dim=1, norm='ortho')
         
         return delta
+
+
+class FreRIAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.freq_len = pred_len // 2 + 1
+        self.scale = 1e-5
+        
+        # Using matrix multiplication for frequency mixing, processing each variable independently.
+        # Params shape: (n_vars, freq_len, freq_len)
+        self.r = nn.Parameter(self.scale * torch.randn(n_vars, self.freq_len, self.freq_len))
+        self.i = nn.Parameter(self.scale * torch.randn(n_vars, self.freq_len, self.freq_len))
+        self.rb = nn.Parameter(torch.zeros(n_vars, self.freq_len))
+        self.ib = nn.Parameter(torch.zeros(n_vars, self.freq_len))
+        
+        self.sparsity_threshold = 0.01
+
+    def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
+        B, L, D = base_pred.shape
+        assert L == self.pred_len and D == self.n_vars
+        
+        # FFT: (B, L, D) -> (B, L_freq, D)
+        x_fft = torch.fft.rfft(base_pred, dim=1, norm='ortho')
+        
+        # Permute to (B, D, L_freq) for vector-matrix op per variable
+        x_fft = x_fft.permute(0, 2, 1)
+        
+        # Matrix Multiplication Logic adapted from FreMLP
+        # We mix frequencies (L_freq) for each channel (D) independently
+        # x: (B, D, L_in), W: (D, L_in, L_out) -> (B, D, L_out)
+        
+        o_real = (
+            torch.einsum('bdl,dlk->bdk', x_fft.real, self.r) - \
+            torch.einsum('bdl,dlk->bdk', x_fft.imag, self.i) + \
+            self.rb.unsqueeze(0)
+        )
+        
+        o_imag = (
+            torch.einsum('bdl,dlk->bdk', x_fft.imag, self.r) + \
+            torch.einsum('bdl,dlk->bdk', x_fft.real, self.i) + \
+            self.ib.unsqueeze(0)
+        )
+        
+        # Softshrink sparsity
+        y_stack = torch.stack([o_real, o_imag], dim=-1)
+        # y_stack = F.softshrink(y_stack, lambd=self.sparsity_threshold)
+        y = torch.view_as_complex(y_stack) # (B, D, L_freq)
+        
+        # Permute back to (B, L_freq, D) and iFFT
+        y = y.permute(0, 2, 1)
+        delta = torch.fft.irfft(y, n=L, dim=1, norm='ortho')
+        
+        return delta
+    
+
+class PolarFreqAdapter(BaseAdapter):
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.freq_len = pred_len // 2 + 1
+        self.scale = 1e-5
+        
+        # --- 优化点 1: 解耦能量与周期 ---
+        # 不再学习实部/虚部权重，而是学习幅值增益(Mag)和相位偏移(Phase)
+        
+        # mag_scale: 初始化为0，对应乘法因子为1 (无缩放)
+        # 控制“能量”，修复波峰波谷幅度不对的问题
+        self.mag_scale = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        
+        # phase_shift: 初始化为0，对应无相位旋转
+        # 控制“周期对齐”，修复预测滞后(Lag)的问题
+        self.phase_shift = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+
+        # 偏置项，用于修正直流分量漂移
+        self.mag_bias = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        
+        self.sparsity_threshold = 0.01
+
+    def complex_softshrink(self, complex_tensor, lambd):
+        """
+        --- 优化点 2: 基于能量的稀疏化 (Complex Softshrink) ---
+        不同于分别截断实部和虚部，这里根据复数的模长（能量）进行截断。
+        这样保持了相位的方向，只收缩能量，物理意义更明确。
+        """
+        mag = stable_complex_abs(complex_tensor)
+        
+        # 优化：避免 calculation of angle() 和 polar()，直接缩放
+        # scale = (mag - lambd) / mag  (if mag > lambd else 0)
+        #       = relu(mag - lambd) / (mag + eps)
+        scale = F.relu(mag - lambd) / (mag + 1e-6)
+        
+        # 显式构造复数，避免 NPU 上 complex * real 可能的问题 (安全起见)
+        return torch.complex(complex_tensor.real * scale, complex_tensor.imag * scale)
+
+    def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
+        B, L, D = base_pred.shape
+        
+        # 1. 转到频域
+        x_fft = torch.fft.rfft(base_pred, dim=1, norm='ortho')
+        
+        # 2. 提取输入信号的“能量”和“周期特征”
+        # mag_in: (B, L_freq, D)
+        mag_in = stable_complex_abs(x_fft)
+        
+        # 使用 atan2 替代 angle() 以规避 NPU 反向传播中的 complex abs 问题
+        phase_in = torch.atan2(x_fft.imag, x_fft.real)
+        
+        # 3. 极坐标下的校准 (Polar Calibration)
+        # 能量校准：原始能量 * (1 + 学习到的增益) + 偏置
+        mag_out = mag_in * (1 + self.scale * self.mag_scale) + self.mag_bias
+        
+        # 周期校准：原始相位 + 学习到的偏移
+        phase_out = phase_in + (self.scale * self.phase_shift)
+        
+        # 4. 重建校准后的复数信号
+        # 使用显式 complex 构造替代 torch.polar
+        delta_fft = torch.complex(
+            mag_out * torch.cos(phase_out), 
+            mag_out * torch.sin(phase_out)
+        )
+        
+        # # 5. 计算残差 (Residual)
+        # # 我们希望输出的是 delta，而不是校准后的全量，以便后续叠加
+        # delta_fft = y_calibrated - x_fft
+        
+        # 6. 基于能量的稀疏处理
+        delta_fft = self.complex_softshrink(delta_fft, self.sparsity_threshold)
+        
+        # 7. 逆变换回时域
+        delta = torch.fft.irfft(delta_fft, n=L, dim=1, norm='ortho')
+        
+        return delta
+
 
 class TimeFreqDualAdapter(BaseAdapter):
     """
@@ -442,5 +576,9 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return RobustAffineAdapter(pred_len=pred_len, n_vars=n_vars)
     elif name == "complex-freq":
         return ComplexFreqAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "freri":
+        return FreRIAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "polar-freq":
+        return PolarFreqAdapter(pred_len=pred_len, n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")

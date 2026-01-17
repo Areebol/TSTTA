@@ -44,15 +44,15 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'lowrank-coba-GCM': CoBA_low_rank_GCM,
         'coba-online-only': CoBA_online_only,
         'identity': IdentityAdapter,
-        'CoBA_FreqDomain_GCM': CoBA_FreqDomain_GCM,
-        'CoBA_low_rank_FreqAdapter': CoBA_low_rank_FreqAdapter,
+        'CoBA-FreqDomain-GCM': CoBA_FreqDomain_GCM,
+        'CoBA-low-rank-FreqAdapter': CoBA_low_rank_FreqAdapter,
     }
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA_FreqDomain_GCM', 'CoBA_low_rank_FreqAdapter']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -179,7 +179,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, CoBA_GCM) or isinstance(self.cali.out_cali, CoBA_low_rank_GCM) or isinstance(self.cali.out_cali, Auxiliary_GCM):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
