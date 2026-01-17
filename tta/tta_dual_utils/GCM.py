@@ -971,7 +971,7 @@ class CoBA_low_rank_FreqAdapter(nn.Module):
             params.append(self.freq_rb)
             params.append(self.freq_ib)
             params.append(self.tafas_gating)
-            params.extend(list(self.query_net.parameters()))
+            # params.extend(list(self.query_net.parameters()))
         else:
             pass
         return params
@@ -1214,7 +1214,7 @@ class CoBA_FreqDomain_GCM(nn.Module):
             
             # Verify if query net or codebook should be frozen (Usually yes for TTA)
             # To be safe, we also include query net if we want inputs to adapt
-            params.extend(list(self.query_net.parameters())) 
+            # params.extend(list(self.query_net.parameters())) 
         else:
             # Codebook training params not needed here as this is usually called by the TTA optimizer
             pass 
