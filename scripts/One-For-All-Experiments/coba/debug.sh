@@ -96,7 +96,7 @@ MODELS=("DLinear")
 DATASETS=("ETTm1")
 TARGETS=("ETTm2")
 PRED_LENS=(720)
-LRS=(0.0001)
+LRS=(0.001)
 ORTH_LOSSES=(0.01)
 ONLINE_LRS=(0.001)
 
@@ -149,9 +149,9 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.SOLVER.WEIGHT_DECAY ${WEIGHT_DECAY} \
       TTA.DUAL.GATING_INIT ${GATING_INIT} \
       TTA.DUAL.PETSA_LOWRANK 16 \
-      TTA.DUAL.CALI_NAME lowrank-coba-GCM \
-      TTA.DUAL.LOSS_NAME LOWRANK-COBA \
-      TTA.DUAL.CALI_INPUT_ENABLE False \
+      TTA.DUAL.CALI_NAME tafas-GCM \
+      TTA.DUAL.LOSS_NAME MSE \
+      TTA.DUAL.CALI_INPUT_ENABLE True \
       TTA.DUAL.CALI_OUTPUT_ENABLE True \
       TTA.DUAL.ADJUST_PRED True \
       RESULT_DIR ${RESULT_DIR} \
@@ -167,3 +167,5 @@ parallel --lb -j ${TOTAL_JOBS} '
       TTA.DUAL.LAMBDA_ORTHO ${ORTH} \
       TTA.METHOD Ours-tta
   ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${BASE_NS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${LRS[@]}" ::: "${ORTH_LOSSES[@]}" ::: "${ONLINE_LRS[@]}" ::: "${TARGETS[@]}"
+      # TTA.DUAL.CALI_NAME lowrank-coba-GCM \
+      # TTA.DUAL.LOSS_NAME LOWRANK-COBA \
