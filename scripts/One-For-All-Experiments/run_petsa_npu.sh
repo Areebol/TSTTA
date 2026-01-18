@@ -1,5 +1,5 @@
 #!/bin/bash
-NPUS=(0 3)          # Available NPU IDs
+NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=1               # Parallel jobs per NPU
@@ -15,10 +15,10 @@ PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
 # PRED_LENS=(192)
-DATASETS=("ETTm1")
-TARGETS=("ETTm2")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 # LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
-LRS=(0.001)
+LRS=(0.001 0.003)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)
@@ -37,7 +37,8 @@ parallel --lb -j ${TOTAL_JOBS} '
 
     echo "Job {%}: MODEL={1} DATASET={2} PRED={3} TARGET={4} LR=${BASE_LR} -> Running on NPU $NPU_ID"
     
-    export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
         SEED ${SEED} \

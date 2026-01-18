@@ -55,10 +55,7 @@ class PETSALoss(nn.Module):
             print("NaN detected in frequency loss")
             print(loss_feq)
             raise ValueError("NaN detected in frequency loss")
-        if global_device == torch.device('npu'):
-            loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
-        else:
-            loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
+        loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
         loss =  loss_tmp + loss_feq * self.alpha
         coss = self.person_cor(pred, ground_truth)
         sf_pred = torch.nn.functional.softmax(pred - pred.mean(dim=1, keepdim=True))

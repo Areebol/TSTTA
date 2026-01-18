@@ -5,13 +5,14 @@
 ############################################
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("PatchTST")
-DATASETS=("ETTm1")
-TARGETS=("ETTm2")
+MODELS=("DLinear")
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(192)
 
-NPUS=(3)          # 可用的 NPU ID
+# NPUS=(3)          # 可用的 NPU ID
+NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数
@@ -32,7 +33,8 @@ parallel --lb -j ${TOTAL_JOBS} '
 
     echo "Job slot {%}: NPU=${NPU_ID}  MODEL={1}  DATASET={2}  PRED={3}  TARGET={4}"
 
-    export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
         SEED ${SEED} \

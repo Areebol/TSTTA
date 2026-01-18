@@ -314,13 +314,9 @@ class Adapter(nn.Module):
                 if self.cfg.TTA.PETSA.CALI_MODULE:
                     pred = self.cali.output_calibration(pred)
 
-                if global_device == torch.device('npu'):
-                    loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
-                    loss_feq = stable_complex_abs(loss_feq).mean()
-                    loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
-                else:
-                    loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1)).abs().mean() 
-                    loss_tmp = torch.nn.functional.huber_loss(pred, ground_truth, delta=0.5)
+                loss_feq = (torch.fft.rfft(pred, dim=1) - torch.fft.rfft(ground_truth, dim=1))
+                loss_feq = stable_complex_abs(loss_feq).mean()
+                loss_tmp = huber_loss(pred, ground_truth, delta=0.5)
                 loss =  loss_tmp + loss_feq * self.cfg.TTA.PETSA.LOSS_ALPHA
 
                 coss = self.person_cor(pred, ground_truth)

@@ -1,8 +1,8 @@
 #!/bin/bash
-NPUS=(3)          # Available NPU IDs
+NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=8               # Parallel jobs per NPU
+PER_NPU=4               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -19,12 +19,12 @@ PRED_LENS=(96 192 336 720)
 
 # LRS=(0.001)
 # LRS=(0.01 0.005 0.003 0.001 0.0005 0.0001)
-LRS=(1e-2 5e-3 3e-3 1e-3 1e-4 5e-5 1e-5)
-LRS=(3e-3)
+LRS=(5e-3 1e-3 1e-4 5e-5 1e-5)
+# LRS=(1e-5 1e-6)
 # LRS=(5e-3 3e-3 1e-3)
 # LRS=(0.1 0.05 0.03 0.01)
 # LRS=(0.05 0.03 0.01)
-# LRS=(0.01)
+# LRS=(0.03)
 # LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 LAMBDA_ORTHO=(1e-2)
 
@@ -35,7 +35,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
   NPU_ID=${npu_array[$slot_idx]}
   
-  export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  export CUDA_VISIBLE_DEVICES=${NPU_ID}
   SEED=0
 
   MODEL={1}
@@ -67,7 +68,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.SOLVER.BASE_LR ${LR} \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-NormQ \
+    TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-GCM \
     TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE "freq-base-CI" \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \

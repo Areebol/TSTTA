@@ -67,11 +67,8 @@ class FreqAdapter(BaseAdapter):
         
         x_fft = torch.fft.rfft(base_pred, dim=1)
         
-        if global_device == torch.device('npu'):
-            amp = stable_complex_abs(x_fft)
-        else:
-            amp = torch.abs(x_fft)
-        phase = torch.angle(x_fft)
+        amp = stable_complex_abs(x_fft)
+        phase = torch.atan2(x_fft.imag, x_fft.real)
         
         amp_adapted = amp * torch.exp(self.amp_gain)
         
