@@ -1250,8 +1250,8 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
         # Initialization
         self._init_bases()
         
-        # Bias in Time Domain (Post-iFFT)
-        self.bias_time = nn.Parameter(torch.zeros(window_len, n_var))
+        # # Bias in Time Domain (Post-iFFT)
+        # self.bias_time = nn.Parameter(torch.zeros(window_len, n_var))
 
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
@@ -1349,7 +1349,7 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
         
         # iFFT for Main Path
         delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
-        delta_time_codebook = delta_time_codebook + self.bias_time
+        # delta_time_codebook = delta_time_codebook + self.bias_time
 
         # 4. Online Path: Element-wise Frequency Calibration
         if self.online_mode:
@@ -1385,6 +1385,130 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
         else:
             params.append(self.tafas_gating)
         return params
+
+
+class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
+    def __init__(self, window_len, n_var=1, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI', **kwargs):
+        super(CoBA_FreqDomain_ElementWise_NormQ, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        self.freq_len = window_len // 2 + 1
+        
+        # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
+        
+        if var_wise:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+        else:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+
+        self._init_bases()
+
+        # --- Query Net Selection ---
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
+        else:
+             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+
+        # --- 2. Online Mode Parameters ---
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.scale = 1e-5
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+
+    def _init_bases(self):
+        # nn.init.kaiming_uniform_(self.bases_r, gain=0.1)
+        # nn.init.kaiming_uniform_(self.bases_i, gain=0.1)
+        nn.init.xavier_uniform_(self.bases_r)
+        nn.init.xavier_uniform_(self.bases_i)
+    
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+
+        xr, xi = x_fft.real, x_fft.imag
+        z_r = xr * w_r - xi * w_i
+        z_i = xr * w_i + xi * w_r
+        return torch.complex(z_r, z_i)
+
+    def forward(self, x):
+        B, L, _ = x.shape
+        
+        # 1. 归一化处理 (Instance Normalization)
+        # 计算每个样本每个维度的统计量
+        mu = x.mean(dim=1, keepdim=True)
+        stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        x_norm = (x - mu) / stdev
+
+        # 2. 对归一化后的结果做 FFT
+        x_fft_norm = torch.fft.rfft(x_norm, dim=1, norm='ortho') 
+
+        # 3. Query & Codebook Selection (基于归一化结果)
+        query = self.query_net(x_norm) 
+        query_norm = F.normalize(query, p=2, dim=-1)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2), 
+            keys_norm.transpose(1, 2)
+        ).squeeze(2) 
+        
+        k = 2 
+        topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
+        mask = torch.full_like(similarity, float('-inf'))
+        mask.scatter_(-1, topk_indices, topk_vals)
+        coeffs = F.softmax(mask, dim=-1) 
+
+        # 4. Main Path (基于归一化频谱计算 delta)
+        delta_fft_codebook = self.complex_element_wise_forward(x_fft_norm, coeffs)
+        delta_time_codebook_norm = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+
+        # 5. Online Path (基于归一化频谱)
+        if self.online_mode:
+            delta_real_online = (
+                x_fft_norm.real * self.online_freq_r - x_fft_norm.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft_norm.imag * self.online_freq_r + x_fft_norm.real * self.online_freq_i + self.online_bias_i
+            )
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            delta_time_online_norm = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            delta_time_online_norm = torch.tanh(self.tafas_gating) * delta_time_online_norm
+            
+            total_delta_norm = delta_time_codebook_norm + delta_time_online_norm
+        else:
+            total_delta_norm = delta_time_codebook_norm
+
+        # 6. 反归一化 (Denormalize)
+        # 将归一化空间学到的残差映射回原始量纲
+        # 注意：这里只还原尺度（stdev），不需要加回 mu，因为 delta 是残差
+        total_delta = total_delta_norm * stdev
+
+        return total_delta
+
+
+
+
+
+
 
 
 class CoBA_FreqDomain_ElementWise_WB(nn.Module):

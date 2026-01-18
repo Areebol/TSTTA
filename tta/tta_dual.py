@@ -46,13 +46,15 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'identity': IdentityAdapter,
         'CoBA-FreqDomain-GCM': CoBA_FreqDomain_GCM,
         'CoBA-low-rank-FreqAdapter': CoBA_low_rank_FreqAdapter,
+        'CoBA-FreqDomain-ElementWise-GCM': CoBA_FreqDomain_ElementWise_GCM,
+        'CoBA-FreqDomain-ElementWise-NormQ': CoBA_FreqDomain_ElementWise_NormQ,
     }
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA-FreqDomain-ElementWise-GCM', 'CoBA-FreqDomain-ElementWise-NormQ']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -89,6 +91,8 @@ def build_loss_fn(cfg) -> nn.Module:
         return LowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     elif loss_name == "Freq-LowRank-CoBA":
         return FreqLowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
+    elif loss_name == "Freq-EW-CoBALoss":
+        return FreqElementWiseCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -162,6 +166,18 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-online")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-feq-ew-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-feq-ew-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-feq-ew-norm-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-feq-ew-norm-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'coba-online-only':
             parts.append("coba-online-only")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
@@ -185,7 +201,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, CoBA_FreqDomain_ElementWise_NormQ)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
@@ -224,6 +240,8 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
                     loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
+                elif isinstance(self.loss_fn, FreqElementWiseCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
                 # print(loss)
@@ -282,6 +300,8 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
                     loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
+                elif isinstance(self.loss_fn, FreqElementWiseCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
 
@@ -310,6 +330,8 @@ class Adapter(nn.Module):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
             elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
+            elif isinstance(self.loss_fn, FreqElementWiseCoBALoss):
+                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
             self.optimizer.zero_grad()
