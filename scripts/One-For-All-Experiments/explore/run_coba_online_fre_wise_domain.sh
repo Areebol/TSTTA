@@ -65,10 +65,10 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'Dual-tta' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR 1e-3 \
+    TTA.SOLVER.BASE_LR 3e-3 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-GCM \
+    TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-NormQ \
     TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE "freq-base-CI" \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \

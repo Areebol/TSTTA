@@ -1452,16 +1452,16 @@ class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
     def forward(self, x):
         B, L, _ = x.shape
         
-        # 1. 归一化处理 (Instance Normalization)
+        #  归一化处理 (Instance Normalization)
         # 计算每个样本每个维度的统计量
         mu = x.mean(dim=1, keepdim=True)
         stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5)
         x_norm = (x - mu) / stdev
 
-        # 2. 对归一化后的结果做 FFT
-        x_fft_norm = torch.fft.rfft(x_norm, dim=1, norm='ortho') 
+        # 缩小量纲的差距，但是保持大小相对关系
+        # x_norm = torch.sign(x) * torch.log(torch.abs(x) + 1)
 
-        # 3. Query & Codebook Selection (基于归一化结果)
+        # 对归一化后的结果做 Query & Codebook Selection (基于归一化结果)
         query = self.query_net(x_norm) 
         query_norm = F.normalize(query, p=2, dim=-1)
         keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
@@ -1478,32 +1478,39 @@ class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
         coeffs = F.softmax(mask, dim=-1) 
 
         # 4. Main Path (基于归一化频谱计算 delta)
-        delta_fft_codebook = self.complex_element_wise_forward(x_fft_norm, coeffs)
-        delta_time_codebook_norm = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+        x_fft_raw = torch.fft.rfft(x, dim=1, norm='ortho')
+        delta_fft_codebook = self.complex_element_wise_forward(x_fft_raw, coeffs)
+        delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
 
         # 5. Online Path (基于归一化频谱)
         if self.online_mode:
             delta_real_online = (
-                x_fft_norm.real * self.online_freq_r - x_fft_norm.imag * self.online_freq_i + self.online_bias_r
+                x_fft_raw.real * self.online_freq_r - x_fft_raw.imag * self.online_freq_i + self.online_bias_r
             )
             delta_imag_online = (
-                x_fft_norm.imag * self.online_freq_r + x_fft_norm.real * self.online_freq_i + self.online_bias_i
+                x_fft_raw.imag * self.online_freq_r + x_fft_raw.real * self.online_freq_i + self.online_bias_i
             )
             y_online = torch.complex(delta_real_online, delta_imag_online)
-            delta_time_online_norm = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
-            delta_time_online_norm = torch.tanh(self.tafas_gating) * delta_time_online_norm
+            delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
             
-            total_delta_norm = delta_time_codebook_norm + delta_time_online_norm
+            total_delta = x + delta_time_codebook + delta_time_online
         else:
-            total_delta_norm = delta_time_codebook_norm
-
-        # 6. 反归一化 (Denormalize)
-        # 将归一化空间学到的残差映射回原始量纲
-        # 注意：这里只还原尺度（stdev），不需要加回 mu，因为 delta 是残差
-        total_delta = total_delta_norm * stdev
+            total_delta = delta_time_codebook
 
         return total_delta
 
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
+        else:
+            params.append(self.tafas_gating)
+        return params
 
 
 
