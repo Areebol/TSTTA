@@ -2,7 +2,7 @@
 NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=4               # Parallel jobs per NPU
+PER_NPU=1               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -14,7 +14,7 @@ MODELS=("DLinear")
 DATASETS=("ETTm2")
 TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(96)
+PRED_LENS=(720)
 # LRS=(0.5 0.3 0.1 0.08)
 
 # LRS=(0.001)
@@ -22,9 +22,9 @@ PRED_LENS=(96 192 336 720)
 # LRS=(5e-3 1e-3 1e-4 5e-5 1e-5)
 # LRS=(1e-5 1e-6)
 # LRS=(5e-3 3e-3 1e-3)
-LRS=(0.1 0.05 0.03 0.01)
+LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
 # LRS=(0.05 0.03 0.01)
-# LRS=(0.03)
+LRS=(0.03)
 # LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 LAMBDA_ORTHO=(1e-2)
 

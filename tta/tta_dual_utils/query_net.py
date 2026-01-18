@@ -196,11 +196,10 @@ class QueryNet_Freq_Separate_ChannelIndependence(nn.Module):
         # --- 核心修改 ---
         # 输入维度为 fft_len * 2 (实部 + 虚部)
         # 使用 Shared MLP 独立处理每个变量 (Channel Independence)
-        self.net = nn.Sequential(
-            nn.Linear(fft_len * 2, feature_dim),
-            nn.Linear(feature_dim, feature_dim)
-        )
-
+        self.linear_real = nn.Linear(fft_len, feature_dim)
+        self.linear_imag = nn.Linear(fft_len, feature_dim)
+        self.proj = nn.Linear(2* feature_dim, feature_dim)
+        
     def forward(self, x):
         """
         x: (Batch, Window_len, N_var)
@@ -220,13 +219,16 @@ class QueryNet_Freq_Separate_ChannelIndependence(nn.Module):
         x_real = x_real.permute(0, 2, 1)
         x_imag = x_imag.permute(0, 2, 1)
 
+        x_real_feat = self.linear_real(x_real)
+        x_imag_feat = self.linear_imag(x_imag)
+
         # 在特征维度(dim=-1)拼接实部和虚部
-        # 结果形状: (Batch, N_var, Freq_len * 2)
-        x_feat = torch.cat([x_real, x_imag], dim=-1)
+        # 结果形状: (Batch, N_var, Feature_dim * 2)
+        x_feat = torch.cat([x_real_feat, x_imag_feat], dim=-1)
 
         # 4. 通过 Shared MLP
-        # Input: (B, V, Freq_len * 2) -> Output: (B, V, Feature_dim)
-        query = self.net(x_feat)
+        # Input: (B, V, Feature_dim * 2) -> Output: (B, V, Feature_dim)
+        query = self.proj(x_feat)
         
         return query
     
