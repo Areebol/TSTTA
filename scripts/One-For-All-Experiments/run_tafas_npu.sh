@@ -1,5 +1,5 @@
 #!/bin/bash
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -13,8 +13,8 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
+DATASETS=("ETTm1")
+TARGETS=("ETTm2")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
 # LRS=(0.001)

@@ -186,7 +186,7 @@ if __name__ == "__main__":
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
-        dataset_names=["ETTm2_2_ETTm1"],
+        dataset_names=["ETTm1_2_ETTm2"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
         # dataset_names=None,
         

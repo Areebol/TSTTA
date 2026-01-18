@@ -156,9 +156,12 @@ class Adapter(nn.Module):
         #     parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         parts = []
-        if self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM':
+        if self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("coba-feq-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'coba-online-only':
             parts.append("coba-online-only")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')

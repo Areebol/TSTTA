@@ -1,8 +1,8 @@
 #!/bin/bash
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(0 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=4               # Parallel jobs per NPU
+PER_NPU=1               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -15,8 +15,8 @@ PRED_LENS=(96 192 336 720)
 
 MODELS=("DLinear")
 # PRED_LENS=(192)
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
+DATASETS=("ETTm1")
+TARGETS=("ETTm2")
 # LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
 LRS=(0.001)
 

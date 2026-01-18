@@ -183,6 +183,39 @@ class FreRIAdapter(BaseAdapter):
         
         return delta
     
+class FreqRatioAdapter(BaseAdapter): # 假设 BaseAdapter 继承自 nn.Module
+    def __init__(self, pred_len: int, n_vars: int):
+        super().__init__(pred_len, n_vars)
+        self.freq_len = pred_len // 2 + 1
+        self.r_mask = nn.Parameter(torch.zeros(1, self.freq_len, n_vars))
+        
+    def forward(self, base_pred: torch.Tensor) -> torch.Tensor:
+        B, L, D = base_pred.shape
+        x_fft = torch.fft.rfft(base_pred, dim=1, norm='ortho')
+
+        mag = stable_complex_abs(x_fft)
+        
+        # phase = atan2(imag, real)
+        phase = torch.atan2(x_fft.imag, x_fft.real)
+        
+        # 2. 计算比率
+        ratio = torch.sigmoid(self.r_mask) * 2.0
+        
+        # 3. 作用于幅度
+        new_mag = mag * ratio
+        
+        # 4. 结合相位还原复数 (替代 torch.polar)
+        # 根据欧拉公式: new_x = new_mag * (cos(phase) + i * sin(phase))
+        new_real = new_mag * torch.cos(phase)
+        new_imag = new_mag * torch.sin(phase)
+        
+        # 重新构建复数张量
+        delta_fft = torch.complex(new_real, new_imag)
+        
+        # 5. 转回时域
+        delta = torch.fft.irfft(delta_fft, n=L, dim=1, norm='ortho')
+        
+        return delta
 
 class PolarFreqAdapter(BaseAdapter):
     def __init__(self, pred_len: int, n_vars: int):
@@ -580,5 +613,7 @@ def adapter_factory(name, pred_len, n_vars, cfg):
         return FreRIAdapter(pred_len=pred_len, n_vars=n_vars)
     elif name == "polar-freq":
         return PolarFreqAdapter(pred_len=pred_len, n_vars=n_vars)
+    elif name == "freq-ratio":
+        return FreqRatioAdapter(pred_len=pred_len, n_vars=n_vars)
     else:
         raise ValueError(f"Unknown adapter type: {name}")
