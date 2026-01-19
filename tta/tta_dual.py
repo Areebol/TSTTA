@@ -46,7 +46,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'identity': IdentityAdapter,
         'CoBA-FreqDomain-GCM': CoBA_FreqDomain_GCM,
         'CoBA-low-rank-FreqAdapter': CoBA_low_rank_FreqAdapter,
-        'CoBA-FreqDomain-ElementWise-GCM': CoBA_FreqDomain_ElementWise_GCM,
+        'CoBA_FreqDomain_ElementWise_GCM': CoBA_FreqDomain_ElementWise_GCM,
         'RoCoBA_FreqDomain_GCM': RoCoBA_FreqDomain_GCM,
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
     }
@@ -55,7 +55,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA-FreqDomain-ElementWise-GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -181,7 +181,7 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-online")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             # parts.append(f'{self.cfg.TTA.DUAL.GCM_N_BASES}')
@@ -189,7 +189,7 @@ class Adapter(nn.Module):
             parts.append(f'{self.cfg.TTA.DUAL.QUERY_TYPE}')
             # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-online")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:

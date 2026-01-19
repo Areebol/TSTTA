@@ -1434,7 +1434,7 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
     """
     def __init__(self, window_len, n_var=1, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-norm-CI', 
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI', 
                  conf_threshold=0.5, conf_steepness=10.0, **kwargs):
         super(RoCoBA_FreqDomain_GCM, self).__init__()
         self.window_len = window_len
@@ -1502,14 +1502,45 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
                 nn.init.orthogonal_(self.bases_r)
                 nn.init.orthogonal_(self.bases_i)
 
-    def complex_element_wise_forward(self, x_fft, coeffs):
-        if self.var_wise:
-            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
-            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
-        else:
-            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
-            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+    # def complex_element_wise_forward(self, x_fft, coeffs):
+    #     if self.var_wise:
+    #         w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+    #         w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+    #     else:
+    #         w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+    #         w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
 
+    #     xr, xi = x_fft.real, x_fft.imag
+    #     z_r = xr * w_r - xi * w_i
+    #     z_i = xr * w_i + xi * w_r
+    #     return torch.complex(z_r, z_i)
+
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        # [关键步骤]：实时归一化 Base
+        # 无论 Base 在训练中变成了多大，这里强制把它拉回单位圆
+        # dim=1 是频率维度，保证每个 Base 在频域的整体能量为 1
+        
+        # 你的 bases 形状可能是 (N_bases, Freq_len, N_var)
+        # 我们希望对每个 Base (N, V) 在频率轴 (F) 上归一化
+        eps = 1e-8
+        
+        # 计算 L2 范数: (N, 1, V)
+        norm_r = torch.norm(self.bases_r, p=2, dim=1, keepdim=True)
+        norm_i = torch.norm(self.bases_i, p=2, dim=1, keepdim=True)
+        
+        # 归一化后的基向量
+        bases_r_unit = self.bases_r / (norm_r + eps)
+        bases_i_unit = self.bases_i / (norm_i + eps)
+
+        # 使用归一化后的基进行聚合
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, bases_r_unit)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, bases_i_unit)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, bases_r_unit)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, bases_i_unit)
+
+        # 计算出标准化的残差
         xr, xi = x_fft.real, x_fft.imag
         z_r = xr * w_r - xi * w_i
         z_i = xr * w_i + xi * w_r
@@ -1630,9 +1661,23 @@ class EnCoBA_FreqDomain_GCM(nn.Module):
         self._init_bases()
 
         # --- Query Net ---
-        if query_type == 'freq-norm-CI':
+        # --- Query Net Selection Logic (Factory) ---
+        print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-separate-CI':
+            self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-mag-phase':
+            self.query_net = QueryNet_Freq_MagPhase(window_len, n_var, feature_dim)
+        elif query_type == 'freq-norm-CI':
             self.query_net = QueryNet_Freq_Norm_ChannelIndependence(window_len, n_var, feature_dim)
         else:
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
         # --- 3. Online Mode ---
@@ -1657,14 +1702,45 @@ class EnCoBA_FreqDomain_GCM(nn.Module):
                 nn.init.orthogonal_(self.bases_r)
                 nn.init.orthogonal_(self.bases_i)
 
-    def complex_element_wise_forward(self, x_fft, coeffs):
-        if self.var_wise:
-            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
-            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
-        else:
-            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
-            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+    # def complex_element_wise_forward(self, x_fft, coeffs):
+    #     if self.var_wise:
+    #         w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+    #         w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+    #     else:
+    #         w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+    #         w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
 
+    #     xr, xi = x_fft.real, x_fft.imag
+    #     z_r = xr * w_r - xi * w_i
+    #     z_i = xr * w_i + xi * w_r
+    #     return torch.complex(z_r, z_i)
+
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        # [关键步骤]：实时归一化 Base
+        # 无论 Base 在训练中变成了多大，这里强制把它拉回单位圆
+        # dim=1 是频率维度，保证每个 Base 在频域的整体能量为 1
+        
+        # 你的 bases 形状可能是 (N_bases, Freq_len, N_var)
+        # 我们希望对每个 Base (N, V) 在频率轴 (F) 上归一化
+        eps = 1e-8
+        
+        # 计算 L2 范数: (N, 1, V)
+        norm_r = torch.norm(self.bases_r, p=2, dim=1, keepdim=True)
+        norm_i = torch.norm(self.bases_i, p=2, dim=1, keepdim=True)
+        
+        # 归一化后的基向量
+        bases_r_unit = self.bases_r / (norm_r + eps)
+        bases_i_unit = self.bases_i / (norm_i + eps)
+
+        # 使用归一化后的基进行聚合
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, bases_r_unit)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, bases_i_unit)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, bases_r_unit)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, bases_i_unit)
+
+        # 计算出标准化的残差
         xr, xi = x_fft.real, x_fft.imag
         z_r = xr * w_r - xi * w_i
         z_i = xr * w_i + xi * w_r
