@@ -11,8 +11,8 @@ export NPU_STR
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("DLinear")
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
+DATASETS=("ETTm1")
+TARGETS=("ETTm2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(720)
 
@@ -27,7 +27,8 @@ BASE_NUMS=(16)
 # LRS=(1e-5 1e-6)
 # LRS=(5e-3 3e-3 1e-3)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
-LRS=(0.1 0.05 0.03 0.01)
+# LRS=(0.1 0.05 0.03 0.01)
+LRS=(0.05 0.03 0.01)
 # LRS=(0.03)
 # LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 LAMBDA_ORTHO=(1e-2)
@@ -70,7 +71,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'Dual-tta' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR 3e-2 \
+    TTA.SOLVER.BASE_LR 1e-4 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
     TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-GCM \

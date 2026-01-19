@@ -152,6 +152,10 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
 
     # --- 打印 ---
     # 这里的循环会自动只打印剩余的 model (因为前面已经 filter 过了)
+    
+    # --- 修改开始: 定义每张子表最大显示的列数 (例如 10 方法/列) ---
+    MAX_COLS_PER_TABLE = 20 
+
     for model_name in table.columns.levels[0]:
         sub_cols = [col for col in colored_table.columns if col[0] == model_name]
         if not sub_cols:
@@ -160,12 +164,31 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
         sub_df = colored_table.loc[:, sub_cols].copy()
         sub_df.columns = [method for (_, method) in sub_df.columns]
         
-        display_df = sub_df.reset_index()
+        # 获取所有方法列列表
+        all_methods_cols = sub_df.columns.tolist()
+        total_methods = len(all_methods_cols)
         
-        print(f"\n{'='*20}")
-        print(f" Model: {model_name} ")
-        print(f"{'='*20}")
-        print(tabulate(display_df, headers="keys", tablefmt="simple", stralign="right"))
+        # 计算总共需要分几部分
+        total_parts = (total_methods + MAX_COLS_PER_TABLE - 1) // MAX_COLS_PER_TABLE
+
+        for i in range(total_parts):
+            # 计算当前块的起始和结束索引
+            start_idx = i * MAX_COLS_PER_TABLE
+            end_idx = min((i + 1) * MAX_COLS_PER_TABLE, total_methods)
+            
+            # 切片取出当前块的方法列
+            current_cols = all_methods_cols[start_idx:end_idx]
+            chunk_df = sub_df[current_cols]
+            
+            # reset_index 会把 dataset_name 和 pred_len 从索引变成列，
+            # 这样它们就会出现在每一个分块表格的最左侧
+            display_df = chunk_df.reset_index()
+            
+            print(f"\n{'='*20}")
+            print(f" Model: {model_name} [Part {i+1}/{total_parts}] ")
+            print(f"{'='*20}")
+            print(tabulate(display_df, headers="keys", tablefmt="simple", stralign="right"))
+    # --- 修改结束 ---
 
     print("\n\n=== Method Mapping (Legend) ===")
     legend_data = [[key, val] for key, val in reverse_mapping.items()]
@@ -186,7 +209,7 @@ if __name__ == "__main__":
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
-        dataset_names=["ETTm2_2_ETTm1"],
+        dataset_names=["ETTm1_2_ETTm2"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
         # dataset_names=None,
         

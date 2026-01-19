@@ -181,6 +181,54 @@ class QueryNet_Freq_Base_ChannelIndependence(nn.Module):
         return query
 
 
+class QueryNet_Freq_Norm_ChannelIndependence(nn.Module):
+    """
+    修改版: 支持 Var-wise Query 生成
+    Input:  (B, L, V)
+    Output: (B, V, feature_dim)
+    """
+    def __init__(self, window_len, n_var, feature_dim):
+        super().__init__()
+        self.n_var = n_var
+        # RFFT 后的长度
+        fft_len = window_len // 2 + 1
+        
+        # --- 核心修改 ---
+        # 1. 输入维度不再乘以 n_var，而是针对单个变量的频谱长度
+        # 2. 我们希望对每个变量独立处理，使用 Shared MLP (对 dim=-1 作用)
+        self.net = nn.Sequential(
+            nn.Linear(fft_len, feature_dim * 2),
+            nn.GELU(), # 建议加上激活函数，增加非线性能力
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        """
+        x: (Batch, Window_len, N_var)
+        """
+        # 1. FFT 变换
+        # x_fft: (Batch, Freq_len, N_var)
+        x_fft = torch.fft.rfft(x, dim=1)
+        
+        # 2. 计算幅度
+        # x_mag: (Batch, Freq_len, N_var)
+        x_mag = stable_complex_abs(x_fft)
+
+        # 3. 维度调整 (Permute)
+        # 我们希望 Linear 层独立作用于每个变量的频谱
+        # 目标形状: (Batch, N_var, Freq_len)
+        x_feat = x_mag.permute(0, 2, 1)
+
+        # 减去每个 channel 频谱的均值，除以标准差
+        x_feat = (x_feat - x_feat.mean(dim=-1, keepdim=True)) / (x_feat.std(dim=-1, keepdim=True) + 1e-6)
+
+        # 4. 通过 MLP
+        # nn.Linear 默认作用于最后一个维度 (Freq_len)
+        # Input: (B, V, Freq_len) -> Output: (B, V, Feature_dim)
+        query = self.net(x_feat)
+        
+        return query
+
 class QueryNet_Freq_Separate_ChannelIndependence(nn.Module):
     """
     修改版: 支持 实部+虚部 拼接输入的 Var-wise Query 生成
@@ -232,6 +280,51 @@ class QueryNet_Freq_Separate_ChannelIndependence(nn.Module):
         
         return query
     
+
+class QueryNet_Freq_MagPhase(nn.Module):
+    def __init__(self, window_len, n_var, feature_dim):
+        super().__init__()
+        fft_len = window_len // 2 + 1
+        
+        # --- 核心修改 ---
+        # 输入维度为 fft_len * 2 (实部 + 虚部)
+        # 使用 Shared MLP 独立处理每个变量 (Channel Independence)
+        self.linear_mag = nn.Linear(fft_len, feature_dim)
+        self.linear_phase = nn.Linear(fft_len, feature_dim)
+        self.proj = nn.Linear(2* feature_dim, feature_dim)
+        
+    def forward(self, x):
+        """
+        x: (Batch, Window_len, N_var)
+        """
+        # 1. FFT 变换 (保持原始量纲，不进行归一化)
+        # x_fft: (Batch, Freq_len, N_var)
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')
+        
+        # 2. 提取模长和相位
+        # x_mag: (Batch, Freq_len, N_var)
+        # x_phase: (Batch, Freq_len, N_var)
+        x_mag = stable_complex_abs(x_fft)
+        x_phase = torch.atan2(x_fft.imag, x_fft.real)
+        # 3. 维度调整与拼接
+        # 先转置为 (Batch, N_var, Freq_len)
+        x_mag = x_mag.permute(0, 2, 1)
+        x_phase = x_phase.permute(0, 2, 1)
+
+        x_mag_feat = self.linear_mag(x_mag)
+        x_phase_feat = self.linear_phase(x_phase)
+
+        # 在特征维度(dim=-1)拼接实部和虚部
+        # 结果形状: (Batch, N_var, Feature_dim * 2)
+        x_feat = torch.cat([x_mag_feat, x_phase_feat], dim=-1)
+        
+        # 4. 通过 Shared MLP
+        # Input: (B, V, Feature_dim * 2) -> Output: (B, V, Feature_dim)
+        query = self.proj(x_feat)
+        return query
+
+
+
 class QueryNet_Freq_MagPhase_ChannelIndependence(nn.Module):
     """
     修改版: 支持 模长(Magnitude) + 周期/相位(Phase) 拼接输入的 Var-wise Query 生成

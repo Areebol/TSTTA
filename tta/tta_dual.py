@@ -47,14 +47,15 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'CoBA-FreqDomain-GCM': CoBA_FreqDomain_GCM,
         'CoBA-low-rank-FreqAdapter': CoBA_low_rank_FreqAdapter,
         'CoBA-FreqDomain-ElementWise-GCM': CoBA_FreqDomain_ElementWise_GCM,
-        'CoBA-FreqDomain-ElementWise-NormQ': CoBA_FreqDomain_ElementWise_NormQ,
+        'RoCoBA_FreqDomain_GCM': RoCoBA_FreqDomain_GCM,
+        'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
     }
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA-FreqDomain-ElementWise-GCM', 'CoBA-FreqDomain-ElementWise-NormQ']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA-FreqDomain-ElementWise-GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -160,7 +161,21 @@ class Adapter(nn.Module):
         #     parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         parts = []
-        if self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+        if self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("ro-coba-feq-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("ro-coba-feq-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'EnCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("en-coba-feq-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'EnCoBA_FreqDomain_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("en-coba-feq-online")
+            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
@@ -169,6 +184,11 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+            # parts.append(f'{self.cfg.TTA.DUAL.GCM_N_BASES}')
+            # parts.append(f'{self.cfg.TTA.DUAL.PRETRAIN_EPOCHS}')
+            parts.append(f'{self.cfg.TTA.DUAL.QUERY_TYPE}')
+            # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
+
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-online")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
@@ -201,7 +221,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, CoBA_FreqDomain_ElementWise_NormQ)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         

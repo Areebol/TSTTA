@@ -1043,9 +1043,14 @@ class CoBA_FreqDomain_GCM(nn.Module):
             self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
         elif query_type == 'freq-base-hybrid':
             self.query_net = QueryNet_Freq_Hybrid(window_len, n_var, feature_dim)
+        elif query_type == 'freq-separate-CI':
+            self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-mag-phase':
+            self.query_net = QueryNet_Freq_MagPhase(window_len, n_var, feature_dim)
         else:
-             # Default fallback
-             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
         # --- 2. Online Mode Parameters (Matrix Freq Adapter) ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
@@ -1261,11 +1266,16 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
         elif query_type == 'freq-base-CD':
             self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
-        elif query_type == 'freq-base-hybrid':
-            self.query_net = QueryNet_Freq_Hybrid(window_len, n_var, feature_dim)
+        elif query_type == 'freq-separate-CI':
+            self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-mag-phase':
+            self.query_net = QueryNet_Freq_MagPhase(window_len, n_var, feature_dim)
+        elif query_type == 'freq-norm-CI':
+            self.query_net = QueryNet_Freq_Norm_ChannelIndependence(window_len, n_var, feature_dim)
         else:
-             # Default fallback
-             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
         # --- 2. Online Mode Parameters (Element-wise Freq Adapter) ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
@@ -1414,49 +1424,42 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
         return params
 
 
-class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
+class RoCoBA_FreqDomain_GCM(nn.Module):
     """
-    CoBA Frequency Domain Element-Wise GCM
+    RoCoBA (Robust Codebook-based Adaptation) 
     
-    1. Main Path (Codebook): 
-       Input -> FFT -> Query -> Select Freq Domain Bases (Element-Wise) -> iFFT -> Residual
-       - Replaces low-rank matrix multiplication with element-wise multiplication.
-       - Bases are defined directly in frequency domain with shape matching the FFT features.
-    
-    2. Online Path (Test-time Adaptation):
-       Input -> FFT -> Per-Variable Element-Wise Freq Transform -> iFFT -> Gated Residual
+    改进点：
+    引入 Confidence-based Gating 机制。当测试样本的模式与 Codebook 匹配度较低时
+    （如 ETTh1 -> ETTh2 跨域），自动削减残差强度，防止错误校准带来的负面影响。
     """
     def __init__(self, window_len, n_var=1, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-separate-CI', **kwargs):
-        super(CoBA_FreqDomain_ElementWise_NormQ, self).__init__()
+                 n_bases=8, feature_dim=32, query_type='freq-norm-CI', 
+                 conf_threshold=0.5, conf_steepness=10.0, **kwargs):
+        super(RoCoBA_FreqDomain_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
         self.var_wise = var_wise
         self.n_bases = n_bases
         self.feature_dim = feature_dim
         self.online_mode = False
-        self.analyzer = CoBA_Analyzer(self)
         self.freq_len = window_len // 2 + 1
         
-        # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
+        # 门控超参数
+        self.conf_threshold = conf_threshold
+        self.conf_steepness = conf_steepness
+        
+        # --- 1. Codebook / Bases ---
         self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         
         if var_wise:
-            # Bases: (N_bases, Freq_len, N_var)
-            # Two sets for Real and Imaginary parts of the frequency filter
             self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
             self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
         else:
-            # Bases: (N_bases, Freq_len)
             self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
             self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
 
-        # Initialization
         self._init_bases()
-        
-        # # Bias in Time Domain (Post-iFFT)
-        # self.bias_time = nn.Parameter(torch.zeros(window_len, n_var))
 
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
@@ -1467,140 +1470,102 @@ class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
         elif query_type == 'freq-base-CD':
             self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
         elif query_type == 'freq-separate-CI':
-            # self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
-            self.query_net = QueryNet_Freq_MagPhase_ChannelIndependence(window_len, n_var, feature_dim)
-        elif query_type == 'freq-base-hybrid':
-            self.query_net = QueryNet_Freq_Hybrid(window_len, n_var, feature_dim)
+            self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-mag-phase':
+            self.query_net = QueryNet_Freq_MagPhase(window_len, n_var, feature_dim)
+        elif query_type == 'freq-norm-CI':
+            self.query_net = QueryNet_Freq_Norm_ChannelIndependence(window_len, n_var, feature_dim)
         else:
-             # Default fallback
-             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
-        # --- 2. Online Mode Parameters (Element-wise Freq Adapter) ---
+        # --- 3. Online Mode Parameters ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.scale = 1e-5
-        
-        # Element-wise Parameters: (1, Freq_len, N_var)
         self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
-        
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
         self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
 
     def _init_bases(self):
-        # Initialize bases_r and bases_i
-        # Using Xavier uniform for filter weights
-        # nn.init.xavier_uniform_(self.bases_r)
-        # nn.init.xavier_uniform_(self.bases_i)
-        # nn.init.kaiming_normal_(self.bases_r)
-        # nn.init.kaiming_normal_(self.bases_i)
-    
-        # 目标：对于每一个 variable (v in n_var)，
-        # 使其对应的 n_bases 个向量 (length = freq_len) 相互正交
-        
         with torch.no_grad():
             if self.var_wise:
-                # 维度: (n_bases, freq_len, n_var)
                 for v in range(self.n_var):
-                    # 1. 处理实部 bases_r
-                    # 构造一个 (n_bases, freq_len) 的临时矩阵进行正交化
-                    # 注意：为了能正交，通常要求 freq_len >= n_bases
                     init_matrix_r = torch.empty(self.n_bases, self.freq_len)
                     nn.init.orthogonal_(init_matrix_r)
                     self.bases_r.data[:, :, v] = init_matrix_r
-
-                    # 2. 处理虚部 bases_i
                     init_matrix_i = torch.empty(self.n_bases, self.freq_len)
                     nn.init.orthogonal_(init_matrix_i)
                     self.bases_i.data[:, :, v] = init_matrix_i
             else:
-                # 维度: (n_bases, freq_len) - 只有一组
                 nn.init.orthogonal_(self.bases_r)
                 nn.init.orthogonal_(self.bases_i)
 
-    def _get_query(self, x):
-        return self.query_net(x)
-    
     def complex_element_wise_forward(self, x_fft, coeffs):
-        """
-        Perform complex element-wise transformation using aggregated bases.
-        x_fft: (B, F, V) - Complex
-        coeffs: (B, V, N)
-        """
-        # 1. Aggregate Bases based on coefficients
         if self.var_wise:
-            # coeffs: bvn, bases: nfv -> bfv
             w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
             w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
         else:
-             # bases: nf -> bnf (broadcast) -> weighted sum -> bf
-             # coeffs: bvn -> collapse V? Or broadcast bases to V?
-             # Assuming we share bases across Var but select per Var (coeffs are bvn)
-             w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
-             w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
 
-        # 2. Complex Element-Wise Multiplication
-        # Z = X * W
-        # (a + bi)(c + di) = (ac - bd) + (ad + bc)i
-        xr, xi = x_fft.real, x_fft.imag # (B, F, V)
-
-        # z_real = xr * wr - xi * wi
-        # z_imag = xr * wi + xi * wr
+        xr, xi = x_fft.real, x_fft.imag
         z_r = xr * w_r - xi * w_i
         z_i = xr * w_i + xi * w_r
-              
         return torch.complex(z_r, z_i)
 
     def forward(self, x):
-        """
-        x shape: (Batch, Window_len, N_var)
-        """
-        B, L, _ = x.shape
+        B, L, V = x.shape
 
-        # 1. Transform to Frequency Domain
-        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  # (B, F, V)
+        # 1. FFT
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  
 
-        # 2. Query & Codebook Selection
-        query = self._get_query(x) 
+        # 2. Query & Similarity
+        query = self.query_net(x) 
         query_norm = F.normalize(query, p=2, dim=-1)
         keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
         
+        # similarity shape: (B, V, N)
         similarity = torch.matmul(
-            query_norm.unsqueeze(2),         # (B, V, 1, D)
-            keys_norm.transpose(1, 2)        # (V, D, N)
-        ).squeeze(2)                         # (B, V, N)
+            query_norm.unsqueeze(2), 
+            keys_norm.transpose(1, 2)
+        ).squeeze(2)
+
+        # --- 核心修改：ReLU Hard Gating (硬截断) ---
+        # 1. 获取最大相似度
+        max_sim, _ = torch.max(similarity, dim=-1) # (B, V)
         
-        # Top-K Softmax Logic
+        # 2. 计算门控值：ReLU(Gain * (Sim - Threshold))
+        # 当 Sim < Threshold 时，Gate 恒为 0
+        gate_raw = F.relu((max_sim - self.conf_threshold) * self.conf_steepness)
+        
+        # 3. 截断到 [0, 1] 之间，防止过度放大
+        conf_gate = torch.clamp(gate_raw, 0.0, 1.0)
+        
+        # 3. Top-K & Softmax
         k = 2 
         topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
         mask = torch.full_like(similarity, float('-inf'))
         mask.scatter_(-1, topk_indices, topk_vals)
-        coeffs = F.softmax(mask, dim=-1) # (B, V, N)
+        coeffs = F.softmax(mask, dim=-1) 
         self.coeffs = coeffs
 
-        # 3. Main Path: Codebook-based Frequency Adaptation (Element-Wise)
+        # 4. Main Path
         delta_fft_codebook = self.complex_element_wise_forward(x_fft, coeffs)
-        
-        # iFFT for Main Path
         delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
-        # delta_time_codebook = delta_time_codebook + self.bias_time
 
-        # 4. Online Path: Element-wise Frequency Calibration
+        # 应用门控：如果模式不匹配，则不进行校准
+        # delta_time_codebook: (B, L, V), conf_gate: (B, V)
+        delta_time_codebook = delta_time_codebook * conf_gate.unsqueeze(1)
+
+        # 5. Online Path & Final Output
         if self.online_mode:
-            delta_real_online = (
-                x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
-            )
-            delta_imag_online = (
-                x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i
-            )
-            
+            delta_real_online = (x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r)
+            delta_imag_online = (x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i)
             y_online = torch.complex(delta_real_online, delta_imag_online)
-            
-            # iFFT Online
             delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
-            
-            # Gating
             delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
-
             out = x + delta_time_codebook + delta_time_online
         else:
             out = x + delta_time_codebook
@@ -1617,6 +1582,170 @@ class CoBA_FreqDomain_ElementWise_NormQ(nn.Module):
             params.append(self.tafas_gating)
             # params.extend(list(self.query_net.parameters()))
             # return params, self.query_net.parameters()
+        else:
+            params.append(self.tafas_gating)
+        return params
+
+
+class EnCoBA_FreqDomain_GCM(nn.Module):
+    """
+    EnCoBA (Binary Version) - 0 or 1 Only
+    
+    机制变化：
+    不再使用软过度。
+    如果 (Entropy > Threshold): Gate = 0 (完全忽略 Codebook)
+    如果 (Entropy <= Threshold): Gate = 1 (完全信任 Codebook)
+    
+    这种"全有或全无"的策略在跨域 OOD 场景下能最大程度减少负迁移。
+    """
+    def __init__(self, window_len, n_var=1, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32, query_type='freq-norm-CI', 
+                 # 阈值建议：
+                 # 0.6 表示只要相似度分布稍微有点乱，就直接弃权
+                 entropy_threshold=0.6, 
+                 **kwargs):
+        super(EnCoBA_FreqDomain_GCM, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        self.freq_len = window_len // 2 + 1
+        
+        # 硬阈值
+        self.entropy_threshold = entropy_threshold
+        
+        # --- 1. Codebook / Bases ---
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
+        
+        if var_wise:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+        else:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+
+        self._init_bases()
+
+        # --- Query Net ---
+        if query_type == 'freq-norm-CI':
+            self.query_net = QueryNet_Freq_Norm_ChannelIndependence(window_len, n_var, feature_dim)
+        else:
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+
+        # --- 3. Online Mode ---
+        self.scale = 1e-5
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+
+    def _init_bases(self):
+        with torch.no_grad():
+            if self.var_wise:
+                for v in range(self.n_var):
+                    init_matrix_r = torch.empty(self.n_bases, self.freq_len)
+                    nn.init.orthogonal_(init_matrix_r)
+                    self.bases_r.data[:, :, v] = init_matrix_r
+                    init_matrix_i = torch.empty(self.n_bases, self.freq_len)
+                    nn.init.orthogonal_(init_matrix_i)
+                    self.bases_i.data[:, :, v] = init_matrix_i
+            else:
+                nn.init.orthogonal_(self.bases_r)
+                nn.init.orthogonal_(self.bases_i)
+
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+
+        xr, xi = x_fft.real, x_fft.imag
+        z_r = xr * w_r - xi * w_i
+        z_i = xr * w_i + xi * w_r
+        return torch.complex(z_r, z_i)
+
+    def forward(self, x):
+        B, L, V = x.shape
+
+        # 1. FFT
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  
+
+        # 2. Query & Similarity
+        query = self.query_net(x) 
+        query_norm = F.normalize(query, p=2, dim=-1)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2), 
+            keys_norm.transpose(1, 2)
+        ).squeeze(2)
+
+        # --- 核心修改：Binary Entropy Gating ---
+        
+        # 2.1 计算熵
+        tau_entropy = 0.1 
+        prob_dist = F.softmax(similarity / tau_entropy, dim=-1) 
+        entropy = -torch.sum(prob_dist * torch.log(prob_dist + 1e-9), dim=-1)
+        max_entropy = torch.log(torch.tensor(self.n_bases, dtype=torch.float32, device=x.device))
+        normalized_entropy = entropy / (max_entropy + 1e-9)
+        
+        # 2.2 二值化逻辑 (Hard Thresholding)
+        # 如果 entropy < threshold，说明很确定，mask = 1.0
+        # 如果 entropy >= threshold，说明不确定，mask = 0.0
+        mask_hard = (normalized_entropy < self.entropy_threshold).float()
+        
+        # 2.3 Straight-Through Estimator (STE) 技巧
+        # 如果你在 TTA 时不需要更新 QueryNet，可以直接用 mask_hard。
+        # 如果需要更新，STE 允许梯度穿过这个硬开关。
+        # 在前向传播中，它等于 mask_hard；在反向传播中，它看起来像是一个连续函数(如1-entropy)。
+        # 这里为了简单展示效果，直接使用 hard mask
+        # ent_gate = mask_hard
+        ent_gate = mask_hard + (1.0 - normalized_entropy) - (1.0 - normalized_entropy).detach()
+        
+        self.last_ent_gate = ent_gate # 监控用，你会看到它全是 0 或 1
+
+        # 3. Top-K & Aggregation
+        k = 2 
+        topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
+        mask = torch.full_like(similarity, float('-inf'))
+        mask.scatter_(-1, topk_indices, topk_vals)
+        coeffs = F.softmax(mask, dim=-1) 
+        self.coeffs = coeffs
+
+        # 4. Main Path
+        delta_fft_codebook = self.complex_element_wise_forward(x_fft, coeffs)
+        delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+
+        # 应用硬开关：非黑即白
+        delta_time_codebook = delta_time_codebook * ent_gate.unsqueeze(1)
+
+        # 5. Online Path & Final Output
+        if self.online_mode:
+            delta_real_online = (x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r)
+            delta_imag_online = (x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i)
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
+            out = x + delta_time_codebook + delta_time_online
+        else:
+            out = x + delta_time_codebook
+
+        return out
+
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
         else:
             params.append(self.tafas_gating)
         return params
