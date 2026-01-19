@@ -1,8 +1,8 @@
 #!/bin/bash
-NPUS=(1 2 3)          # Available NPU IDs
+NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=4               # Parallel jobs per NPU
+PER_NPU=1               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -14,14 +14,22 @@ MODELS=("DLinear")
 DATASETS=("ETTm2")
 TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(96)
+# PRED_LENS=(720)
+
+BASE_NUMS=(4 8 16 32)
+BASE_NUMS=(6)
 # LRS=(0.5 0.3 0.1 0.08)
 
 # LRS=(0.001)
 # LRS=(0.01 0.005 0.003 0.001 0.0005 0.0001)
 # LRS=(1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
-LRS=(5e-3 3e-3 1e-3)
-# LRS=(0.0001)
+# LRS=(1e-1 5e-2 3e-2)
+# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
+# LRS=(1e-5 1e-6)
+# LRS=(5e-3 3e-3 1e-3)
+LRS=(0.1 0.05 0.03 0.01)
+# LRS=(0.05 0.03 0.01)
+# LRS=(0.03)
 # LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 LAMBDA_ORTHO=(1e-2)
 
@@ -32,7 +40,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
   NPU_ID=${npu_array[$slot_idx]}
   
-  export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  export CUDA_VISIBLE_DEVICES=${NPU_ID}
   SEED=0
 
   MODEL={1}
@@ -41,6 +50,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   TARGET={4}
   LR={5}
   LAMBDA_ORTHO={6}
+  N_BASES={7}
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/output_tta/"
@@ -61,18 +71,19 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'Dual-tta' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR 1e-4 \
+    TTA.SOLVER.BASE_LR 0.03 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME lowrank-coba-GCM \
-    TTA.DUAL.LOSS_NAME LOWRANK-COBA \
-    TTA.DUAL.QUERY_TYPE "freq-base-CI" \
+    TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-NormQ \
+    TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
+    TTA.DUAL.QUERY_TYPE "freq-separate-CI" \
+    TTA.DUAL.GCM_N_BASES ${N_BASES} \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
     TTA.DUAL.COBA_ONLINE_LR ${LR} \
-    TTA.DUAL.CALI_INPUT_ENABLE True \
+    TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.CALI_OUTPUT_ENABLE True \
     TTA.DUAL.COBA_ONLINE_ENABLED True \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}"

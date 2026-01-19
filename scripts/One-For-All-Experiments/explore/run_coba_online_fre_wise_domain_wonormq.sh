@@ -14,7 +14,11 @@ MODELS=("DLinear")
 DATASETS=("ETTm2")
 TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
-PRED_LENS=(720)
+# PRED_LENS=(720)
+
+BASE_NUMS=(4 8 16 32)
+BASE_NUMS=(6)
+
 # LRS=(0.5 0.3 0.1 0.08)
 
 # LRS=(0.001)
@@ -22,9 +26,9 @@ PRED_LENS=(720)
 # LRS=(5e-3 1e-3 1e-4 5e-5 1e-5)
 # LRS=(1e-5 1e-6)
 # LRS=(5e-3 3e-3 1e-3)
-LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
-# LRS=(0.05 0.03 0.01)
-LRS=(0.03)
+# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
+LRS=(0.1 0.05 0.03 0.01)
+# LRS=(0.03)
 # LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
 LAMBDA_ORTHO=(1e-2)
 
@@ -45,6 +49,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   TARGET={4}
   LR={5}
   LAMBDA_ORTHO={6}
+  N_BASES={7}
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/output_tta/"
@@ -65,12 +70,13 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'Dual-tta' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR 5e-2 \
+    TTA.SOLVER.BASE_LR 3e-2 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
     TTA.DUAL.CALI_NAME CoBA-FreqDomain-ElementWise-GCM \
     TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE "freq-base-CI" \
+    TTA.DUAL.GCM_N_BASES ${N_BASES} \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
     TTA.DUAL.COBA_ONLINE_LR ${LR} \
     TTA.DUAL.CALI_INPUT_ENABLE False \
@@ -79,4 +85,4 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}"  ::: "${BASE_NUMS[@]}"

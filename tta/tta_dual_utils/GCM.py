@@ -1281,8 +1281,33 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
     def _init_bases(self):
         # Initialize bases_r and bases_i
         # Using Xavier uniform for filter weights
-        nn.init.xavier_uniform_(self.bases_r)
-        nn.init.xavier_uniform_(self.bases_i)
+        # nn.init.xavier_uniform_(self.bases_r)
+        # nn.init.xavier_uniform_(self.bases_i)
+        # nn.init.kaiming_normal_(self.bases_r)
+        # nn.init.kaiming_normal_(self.bases_i)
+    
+        # 目标：对于每一个 variable (v in n_var)，
+        # 使其对应的 n_bases 个向量 (length = freq_len) 相互正交
+        
+        with torch.no_grad():
+            if self.var_wise:
+                # 维度: (n_bases, freq_len, n_var)
+                for v in range(self.n_var):
+                    # 1. 处理实部 bases_r
+                    # 构造一个 (n_bases, freq_len) 的临时矩阵进行正交化
+                    # 注意：为了能正交，通常要求 freq_len >= n_bases
+                    init_matrix_r = torch.empty(self.n_bases, self.freq_len)
+                    nn.init.orthogonal_(init_matrix_r)
+                    self.bases_r.data[:, :, v] = init_matrix_r
+
+                    # 2. 处理虚部 bases_i
+                    init_matrix_i = torch.empty(self.n_bases, self.freq_len)
+                    nn.init.orthogonal_(init_matrix_i)
+                    self.bases_i.data[:, :, v] = init_matrix_i
+            else:
+                # 维度: (n_bases, freq_len) - 只有一组
+                nn.init.orthogonal_(self.bases_r)
+                nn.init.orthogonal_(self.bases_i)
 
     def _get_query(self, x):
         return self.query_net(x)
