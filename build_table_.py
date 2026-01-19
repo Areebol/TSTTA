@@ -11,7 +11,6 @@ def excel_colname(n):
         n = n // 26 - 1
     return s
 
-# --- 修改点 1: 在函数定义中增加了 model_names 参数 ---
 def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=None):
     csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
     if not csv_files:
@@ -44,7 +43,7 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
 
     df = pd.concat(df_list, ignore_index=True)
 
-    # --- 原有的 dataset_names 过滤 ---
+    # --- 过滤数据集 ---
     if dataset_names is not None:
         if "dataset_name" not in df.columns:
             print("No 'dataset_name' column found in input CSVs.")
@@ -56,12 +55,11 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
             print(f"No rows found for dataset_names = {dataset_names}.")
             return
 
-    # --- 修改点 2: 新增 model_names 过滤逻辑 ---
+    # --- 过滤模型 ---
     if model_names is not None:
         if "model" not in df.columns:
             print("No 'model' column found in input CSVs.")
             return
-        # 允许传入单个字符串或列表
         if isinstance(model_names, str):
             model_names = [model_names]
         
@@ -71,12 +69,45 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
             print(f"No rows found for model_names = {model_names}.")
             return
 
-    # 聚合
+    # 1. 基础聚合：算出每个 (dataset, model, len, method) 的均值
     df = (
         df.groupby(["model", "dataset_name", "pred_len", "tta_method"], as_index=False)
           .agg({"mse": "mean"})
     )
+
+    # ==========================================================
+    # --- 修改点: 增加 Avg 行 (Calculation of Average Row) ---
+    # ==========================================================
     
+    # 计算每个 Dataset 在所有 pred_len 上的平均 MSE
+    # 注意：这里我们忽略 pred_len 进行 group，得到该 dataset 下该 method 的总平均
+    df_avg = (
+        df.groupby(["model", "dataset_name", "tta_method"], as_index=False)["mse"]
+          .mean()
+    )
+    df_avg["pred_len"] = "Avg"  # 将这一行的长度标记为 "Avg"
+
+    # 将原始数据和 Avg 数据合并
+    df = pd.concat([df, df_avg], ignore_index=True)
+
+    # --- 设置排序规则，确保 "Avg" 排在最后 ---
+    # 获取所有非 "Avg" 的长度，并按数值排序
+    existing_lens = [x for x in df["pred_len"].unique() if x != "Avg"]
+    # 尝试按数值排序（如果 csv 读入是 int）
+    try:
+        existing_lens = sorted(existing_lens, key=lambda x: float(x))
+    except:
+        existing_lens = sorted(existing_lens)
+    
+    # 定义 Categorical 的顺序：先数字，后 Avg
+    sort_order = existing_lens + ["Avg"]
+    
+    df["pred_len"] = pd.Categorical(df["pred_len"], categories=sort_order, ordered=True)
+    
+    # ==========================================================
+    # --- 修改结束 ---
+    # ==========================================================
+
     # 建立映射
     all_methods = sorted([m for m in df["tta_method"].unique() if m != "None"])
     method_mapping = {m: excel_colname(i) for i, m in enumerate(all_methods)}
@@ -86,13 +117,14 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
 
     df["tta_method"] = df["tta_method"].map(method_mapping)
 
-    # 透视
+    # 透视表
     table = df.pivot_table(
         index=["dataset_name", "pred_len"],
         columns=["model", "tta_method"],
         values="mse"
     )
 
+    # 排序：行索引会按照 dataset_name 字母序 + pred_len (Categorical顺序) 排序
     table = table.sort_index()
     table = table.sort_index(axis=1)
 
@@ -138,6 +170,8 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
                 
                 if val == top1_value:
                     formatted_val = f"{RED}{val_str}{END}"
+                    # 只有当不是 Avg 行时才计入 top1 统计？或者都计入？
+                    # 这里的逻辑是全计入。如果你不想统计 Avg 行的胜率，可以在这里加 if idx[1] != "Avg":
                     top1_count[method_name] += 1
                     is_colored = True
                 elif top2_value is not None and val == top2_value:
@@ -151,7 +185,6 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
                 colored_table.loc[idx, (mod, method_name)] = formatted_val
 
     # --- 打印 ---
-    # 这里的循环会自动只打印剩余的 model (因为前面已经 filter 过了)
     for model_name in table.columns.levels[0]:
         sub_cols = [col for col in colored_table.columns if col[0] == model_name]
         if not sub_cols:
@@ -184,18 +217,8 @@ if __name__ == "__main__":
         input_dir="./results", 
         output_csv="./results/final_tta_summary.csv", 
         
-        # 1. 筛选数据集
-        # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
-        dataset_names=["ETTm2"],
-        # dataset_names=["ETTh1_2_ETTh2"],
-        # dataset_names=["ETTh1_2_ETTh2"],
-        # dataset_names=["ETTm2_2_ETTm1"],
-        # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1",
-                    #    "ETTh1_2_ETTm1", "ETTm1_2_ETTh1", "ETTh2_2_ETTm2", "ETTm2_2_ETTh2"],
-        # dataset_names=None,
-        
-        # 2. 筛选模型 (可以是列表，也可以是单个字符串)
-        # model_names=["DLinear", "MICN","FreTS", "OLS", "PatchTST","iTransformer"]
-        model_names="iTransformer"
-        # model_names=None # 设为 None 则显示所有模型
+        # dataset_names=["ETTm2", "ETTm1"], 
+        dataset_names=["ETTm2_2_ETTm1"], 
+        # model_names=["iTransformer", "PatchTST"] 
+        model_names="DLinear"
     )

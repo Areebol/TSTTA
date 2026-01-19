@@ -83,13 +83,16 @@
 
 
 #!/bin/bash
-QUERY_TYPES=("freq-base")
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+QUERY_TYPES=("freq-base-CI")
+# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+# MODELS=("FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("iTransformer")
 # DATASETS=("ETTm1" "ETTm2" "exchange_rate" "weather")
 # PRED_LENS=(96 192 336 720)
 # MODELS=("DLinear")
 # DATASETS=("weather")
-DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate")
+DATASETS=("ETTm2" "ETTm1")
 PRED_LENS=(96 192 336 720)
 BASE_NS=(6)
 # BASE_NS=(2 10 12 14 16 18 20 22 24)
@@ -100,10 +103,10 @@ ORTH_LOSSES=(0.01)
 # ONLINE_LRS=(0.001 0.0001)
 ONLINE_LRS=(0.001 0.0001 0.0003)
 
-NPUS=(1 2 3 4 5 6 7)          # 可用的 NPU ID
+NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=1               # 每个 NPU 并行任务数
+PER_NPU=2               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"

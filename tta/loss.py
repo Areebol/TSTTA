@@ -275,3 +275,151 @@ class LowRankCoBALoss(nn.Module):
         l_total = l_task + (self.lambda_ortho * l_ortho)
         
         return l_total
+    
+
+class FreqLowRankOrthoLoss(nn.Module):
+    """
+    Frequency Domain Orthogonality Loss.
+    
+    Since the GCM bases in the frequency domain are complex numbers split into 
+    Real and Imaginary parts, this loss applies the orthogonality constraint 
+    separately to both the real-part bases and the imaginary-part bases.
+    
+    Input:
+        Real: (bases_left, bases_right)
+        Imag: (bases_left, bases_right)
+    """
+    def __init__(self):
+        super().__init__()
+        # Reuse the existing spatial/time domain low-rank ortho loss
+        self.ortho_loss = LowRankOrthoLoss()
+
+    def forward(self, real_left, real_right, imag_left, imag_right):
+        """
+        Args:
+            real_left  (Tensor): (N, L, R, V) Real part of U matrix
+            real_right (Tensor): (N, R, L, V) Real part of W matrix
+            imag_left  (Tensor): (N, L, R, V) Imaginary part of U matrix
+            imag_right (Tensor): (N, R, L, V) Imaginary part of W matrix
+            
+        Returns:
+            Tensor: Sum of orthogonality losses for real and imaginary parts.
+        """
+        loss_real = self.ortho_loss(real_left, real_right)
+        loss_imag = self.ortho_loss(imag_left, imag_right)
+        
+        return loss_real + loss_imag
+
+
+class FreqLowRankCoBALoss(nn.Module):
+    """
+    Frequency Domain CoBA Loss.
+    Combines a reconstruction task loss (e.g., MSE) with the Frequency Domain 
+    Low-Rank Orthogonality regularization.
+    """
+    def __init__(self, lambda_ortho=0.01, task_loss_fn=None):
+        super().__init__()
+        
+        # Default to StandardMSELoss if no specific task loss is provided
+        self.task_loss_fn = task_loss_fn if task_loss_fn else StandardMSELoss()
+        self.ortho_loss_fn = FreqLowRankOrthoLoss()
+        self.lambda_ortho = lambda_ortho
+ 
+    def forward(self, pred, ground_truth, real_left, real_right, imag_left, imag_right, coeffs=None):
+        """
+        Args:
+            pred (Tensor): Model predictions
+            ground_truth (Tensor): Target values
+            real_left, real_right: Real part bases decomposition
+            imag_left, imag_right: Imaginary part bases decomposition
+            coeffs (Tensor, optional): Coefficients (unused in this specific loss logic but kept for interface consistency)
+        """
+        
+        # 1. Task Loss
+        l_task = self.task_loss_fn(pred, ground_truth)
+        if torch.isnan(l_task):
+            raise ValueError("NaN detected in task loss")
+            
+        # 2. Frequency Ortho Loss (Real + Imag)
+        l_ortho = self.ortho_loss_fn(real_left, real_right, imag_left, imag_right)
+        if torch.isnan(l_ortho):
+            raise ValueError("NaN detected in ortho loss")
+        
+        l_total = l_task + (self.lambda_ortho * l_ortho)
+        
+        return l_total
+
+
+class ElementWiseOrthoLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, bases):
+        """
+        Calculates orthogonality loss for element-wise bases.
+        Ensures that for each variable/channel, the N bases are mutually orthogonal.
+        
+        Args:
+            bases shape: (N_bases, Freq_len, N_var) or (N_bases, Freq_len)
+        """
+        # Handle non-var-wise case (N, F) -> (N, F, 1)
+        if bases.ndim == 2:
+            bases = bases.unsqueeze(-1)
+            
+        N, F_len, V = bases.shape
+        
+        # 1. Normalize along the frequency dimension (feature dimension)
+        # We treat the frequency spectrum of each basis as a vector.
+        # bases_norm: (N, F, V)
+        bases_norm = F.normalize(bases, p=2, dim=1)
+        
+        # 2. Compute Gram Matrix for each variable group independently
+        # For each variable v, we want matrix B_v (N x F) to have orthogonal rows.
+        # G[i, j, v] = <b_i,v, b_j,v>
+        # Einsum: ifv, jfv -> ijv
+        gram_matrix = torch.einsum('ifv, jfv -> ijv', bases_norm, bases_norm)
+        
+        # 3. Target Identity Matrix
+        # Expand identity (N, N) to (N, N, 1) to broadcast against V dimension
+        identity = torch.eye(N, device=bases.device).unsqueeze(-1)
+        
+        # 4. MSE Loss
+        # Computes mean squared error between Gram matrix and Identity.
+        # This enforces orthogonality (off-diagonals -> 0) and unit norm (diagonals -> 1).
+        return F.mse_loss(gram_matrix, identity)
+
+class FreqElementWiseCoBALoss(nn.Module):
+    """
+    Loss function for CoBA_FreqDomain_ElementWise_GCM.
+    Combines task loss (e.g., MSE) with Orthogonality constraints on the 
+    Element-Wise Frequency bases (bases_r and bases_i).
+    """
+    def __init__(self, lambda_ortho=0.01, task_loss_fn=None):
+        super().__init__()
+        self.task_loss_fn = task_loss_fn if task_loss_fn else StandardMSELoss()
+        self.ortho_loss_fn = ElementWiseOrthoLoss()
+        self.lambda_ortho = lambda_ortho
+ 
+    def forward(self, pred, ground_truth, bases_r, bases_i, coeffs=None):
+        """
+        Args:
+            pred: Model predictions
+            ground_truth: Target values
+            bases_r: Real part of bases (N, F, V)
+            bases_i: Imaginary part of bases (N, F, V)
+            coeffs: Optional coefficients
+        """
+        
+        # 1. Task Loss
+        l_task = self.task_loss_fn(pred, ground_truth)
+        if torch.isnan(l_task):
+            raise ValueError("NaN detected in task loss")
+            
+        # 2. Ortho Constraints on Real and Imaginary Bases
+        # Constraints are applied per n_var group.
+        l_ortho_r = self.ortho_loss_fn(bases_r)
+        l_ortho_i = self.ortho_loss_fn(bases_i)
+        
+        l_total = l_task + self.lambda_ortho * (l_ortho_r + l_ortho_i)
+        
+        return l_total

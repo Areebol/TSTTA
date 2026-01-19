@@ -86,22 +86,21 @@
 
 
 #!/bin/bash
-QUERY_TYPES=("freq-base")
+QUERY_TYPES=("freq-base-CD")
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 MODELS=("DLinear")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
-BASE_NS=(6)
-# BASE_NS=(2 10 12 14 16 18 20 22 24)
-# LRS=(0.0001)
-LRS=(0.001)
+DATASETS=("ETTh1")
+TARGETS=("ETTh2")
+BASE_NS=(1 2 3 4 5 6)
+# BASE_NS=(6)
+LRS=(0.00001)
 
 # ORTH_LOSSES=(0.1 0.05 0.01 0.005 0.001)
 ORTH_LOSSES=(0.01)
-ONLINE_LRS=(0.001 0.0001)
-# ONLINE_LRS=(0.001 0.0001 0.0003)
+# ONLINE_LRS=(0.001)
+ONLINE_LRS=(0.001 0.003)
 
 # NPUS=(1 2 3 4 5 6 7)          # 可用的 NPU ID
 NPUS=(0 1 2 3)          # 可用的 NPU ID
@@ -151,7 +150,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.SOLVER.BASE_LR {6} \
         TTA.DUAL.GCM_N_BASES {4} \
         TTA.DUAL.GCM_VAR_WISE True \
-        TTA.DUAL.PRETRAIN_EPOCHS 2 \
+        TTA.DUAL.PRETRAIN_EPOCHS 1 \
         TRAIN.BATCH_SIZE 512 \
         TTA.DUAL.COBA_ONLINE_ENABLED True \
         TTA.DUAL.COBA_ONLINE_LR {8} \

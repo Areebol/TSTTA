@@ -471,3 +471,52 @@ class QueryNet_Wavelet_MS(nn.Module):
         feat = torch.cat(bands, dim=1)  # (B, V*(level+1))
 
         return self.mlp(feat)
+    
+class QueryNet_Freq_MagPhase_ChannelIndependence(nn.Module):
+    """
+    修改版: 支持 模长(Magnitude) + 周期/相位(Phase) 拼接输入的 Var-wise Query 生成
+    Input:  (B, L, V)
+    Output: (B, V, feature_dim)
+    """
+    def __init__(self, window_len, n_var, feature_dim):
+        super().__init__()
+        self.n_var = n_var
+        # RFFT 后的单侧频谱长度
+        fft_len = window_len // 2 + 1
+        
+        # --- 核心修改 ---
+        # 输入维度为 fft_len * 2 (模长 + 相位)
+        # 使用 Shared MLP 独立处理每个变量 (Channel Independence)
+        self.net = nn.Sequential(
+            nn.Linear(fft_len * 2, feature_dim * 2),
+            nn.GELU(),
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        """
+        x: (Batch, Window_len, N_var)
+        """
+        # 1. FFT 变换 (保持原始量纲)
+        # x_fft: (Batch, Freq_len, N_var)
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')
+        
+        # 2. 计算模长 (Magnitude) 和 相位 (Phase/Angle)
+        # x_mag: 信号的强度 (能量分布)
+        # x_phase: 信号的周期/时间对齐信息
+        x_mag = stable_complex_abs(x_fft)
+        x_phase = torch.atan2(x_fft.imag, x_fft.real)
+
+        # 3. 维度调整 (转置为 Batch, N_var, Freq_len)
+        x_mag = x_mag.permute(0, 2, 1)
+        x_phase = x_phase.permute(0, 2, 1)
+
+        # 4. 在特征维度拼接 模长 和 相位
+        # 结果形状: (Batch, N_var, Freq_len * 2)
+        x_feat = torch.cat([x_mag, x_phase], dim=-1)
+
+        # 5. 通过 Shared MLP 生成 Query
+        # Input: (B, V, Freq_len * 2) -> Output: (B, V, Feature_dim)
+        query = self.net(x_feat)
+        
+        return query
