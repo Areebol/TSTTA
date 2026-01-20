@@ -443,3 +443,76 @@ class FreqElementWiseCoBALoss(nn.Module):
         l_total = l_task + self.lambda_ortho * (l_ortho_r + l_ortho_i)
         
         return l_total
+    
+class SimilarityPenaltyLoss(nn.Module):
+    def __init__(self, tau=0.2):
+        """
+        Args:
+            tau (float): 相似度阈值 (0.0 ~ 1.0)。
+                         如果两个向量的余弦相似度绝对值小于 tau，则损失为 0。
+                         这允许 Pattern 之间存在一定的共性（如都需要修正低频），
+                         只惩罚那些"高度重复"的 Pattern。
+        """
+        super().__init__()
+        self.tau = tau
+
+    def forward(self, bases_r, bases_i):
+        """
+        Args:
+            bases_r: (N_bases, Freq_len, N_var) 或 (N_bases, Freq_len)
+            bases_i: (N_bases, Freq_len, N_var) 或 (N_bases, Freq_len)
+        """
+        # 1. 维度处理：确保是 (N, F, V) 格式
+        if bases_r.ndim == 2:
+            bases_r = bases_r.unsqueeze(-1)
+            bases_i = bases_i.unsqueeze(-1)
+            
+        # 2. 【关键步骤】合并实部和虚部
+        # 我们在特征维度 (dim=1) 进行拼接。
+        # 现在的向量 v 代表了完整的复数频域修正模式。
+        # v shape: (N_bases, 2 * Freq_len, N_var)
+        v = torch.cat([bases_r, bases_i], dim=1)
+        
+        N, F_double, V = v.shape
+        
+        # 3. 归一化 (Normalization)
+        # 我们只关心“方向”是否一致，不关心模长（模长由梯度决定修正力度）
+        v_norm = F.normalize(v, p=2, dim=1, eps=1e-8)
+        
+        # 4. 计算 Gram 矩阵 (Cosine Similarity Matrix)
+        # 使用 einsum 并行计算每个变量 (Channel) 的相似度矩阵
+        # (N, 2F, V) @ (N, 2F, V).T -> (N, N, V)
+        gram_matrix = torch.einsum('ifv, jfv -> ijv', v_norm, v_norm)
+        
+        # 5. 提取非对角线元素 (Off-diagonal elements)
+        # 构造单位阵掩码
+        eye = torch.eye(N, device=v.device).unsqueeze(-1) # (N, N, 1)
+        mask_off_diag = 1.0 - eye
+        
+        # 只保留非对角线部分
+        sim_matrix = gram_matrix * mask_off_diag
+        
+        # 6. 【关键策略】相似度惩罚 (Similarity Penalty / Hinge Loss)
+        # 逻辑：max(0, |similarity| - tau)^2
+        # 只有当两个向量太像了（相似度 > tau）或者太反向了（相似度 < -tau），才开始惩罚。
+        # 这种“软约束”比强制让相似度=0 (MSE) 要温和得多。
+        loss = torch.mean(torch.pow(torch.clamp(torch.abs(sim_matrix) - self.tau, min=0), 2))
+        
+        return loss
+
+class FreqElementWiseSPLoss(nn.Module):
+    def __init__(self, lambda_ortho=0.01, tau=0.2):
+        super().__init__()
+        self.task_loss = nn.MSELoss()
+        # 使用新的 Joint Similarity Loss
+        self.ortho_loss = SimilarityPenaltyLoss(tau=tau)
+        self.lambda_ortho = lambda_ortho
+
+    def forward(self, pred, gt, bases_r, bases_i):
+        # 1. 预测误差
+        l_task = self.task_loss(pred, gt)
+        
+        # 2. 正交/多样性损失 (合并实虚部 + 软约束)
+        l_ortho = self.ortho_loss(bases_r, bases_i)
+        
+        return l_task + self.lambda_ortho * l_ortho

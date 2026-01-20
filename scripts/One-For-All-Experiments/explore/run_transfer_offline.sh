@@ -14,7 +14,7 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
 
 PRED_LENS=(96 192 336 720)
-BASE_NUMS=(16)
+BASE_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
@@ -72,8 +72,8 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.DUAL.PRETRAIN_EPOCHS 2 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME CoBA_FreqDomain_ElementWise_GCM \
-    TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
+    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_GCM \
+    TTA.DUAL.LOSS_NAME Freq-EW-SPLoss \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \

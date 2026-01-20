@@ -1426,16 +1426,19 @@ class CoBA_FreqDomain_ElementWise_GCM(nn.Module):
 
 class RoCoBA_FreqDomain_GCM(nn.Module):
     """
-    RoCoBA (Robust Codebook-based Adaptation) 
     
-    改进点：
-    引入 Confidence-based Gating 机制。当测试样本的模式与 Codebook 匹配度较低时
-    （如 ETTh1 -> ETTh2 跨域），自动削减残差强度，防止错误校准带来的负面影响。
+    1. Main Path (Codebook): 
+       Input -> FFT -> Query -> Select Freq Domain Bases (Element-Wise) -> iFFT -> Residual
+       - Replaces low-rank matrix multiplication with element-wise multiplication.
+       - Bases are defined directly in frequency domain with shape matching the FFT features.
+    
+    2. Online Path (Test-time Adaptation):
+       Input -> FFT -> Per-Variable Element-Wise Freq Transform -> iFFT -> Gated Residual
     """
     def __init__(self, window_len, n_var=1, hidden_dim=32,
                  gating_init=0.01, var_wise=True,
                  n_bases=8, feature_dim=32, query_type='freq-base-CI', 
-                 conf_threshold=0.5, conf_steepness=10.0, **kwargs):
+                 confidence_threshold=0.5, **kwargs):
         super(RoCoBA_FreqDomain_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -1443,24 +1446,29 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
         self.n_bases = n_bases
         self.feature_dim = feature_dim
         self.online_mode = False
+        self.analyzer = CoBA_Analyzer(self)
         self.freq_len = window_len // 2 + 1
         
-        # 门控超参数
-        self.conf_threshold = conf_threshold
-        self.conf_steepness = conf_steepness
+        # [Add]: Confidence Threshold (tau) for Knowledge Retrieval
+        self.confidence_threshold = confidence_threshold
         
-        # --- 1. Codebook / Bases ---
+        # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
         self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         
         if var_wise:
+            # Bases: (N_bases, Freq_len, N_var)
+            # Two sets for Real and Imaginary parts of the frequency filter
             self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
             self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
         else:
+            # Bases: (N_bases, Freq_len)
             self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
             self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
 
+        # Initialization
+        self.scale = 1e-5
         self._init_bases()
-
+        
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
         if query_type == 'time':
@@ -1482,7 +1490,6 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
 
         # --- 3. Online Mode Parameters ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
-        self.scale = 1e-5
         self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -1491,112 +1498,128 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
     def _init_bases(self):
         with torch.no_grad():
             if self.var_wise:
+                # 针对每个变量 (Channel) 独立进行正交化
                 for v in range(self.n_var):
-                    init_matrix_r = torch.empty(self.n_bases, self.freq_len)
-                    nn.init.orthogonal_(init_matrix_r)
-                    self.bases_r.data[:, :, v] = init_matrix_r
-                    init_matrix_i = torch.empty(self.n_bases, self.freq_len)
-                    nn.init.orthogonal_(init_matrix_i)
-                    self.bases_i.data[:, :, v] = init_matrix_i
+                    # 1. 创建联合矩阵: shape (N_bases, 2 * Freq_len)
+                    # 2*Freq_len 意味着我们在 2F 维空间寻找 N 个正交方向
+                    joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                    
+                    # 2. 对联合矩阵进行正交初始化
+                    nn.init.orthogonal_(joint_bases)
+                    
+                    # 3. 拆分回实部和虚部
+                    # split_chunk_size = self.freq_len
+                    bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                    
+                    # 4. 赋值并缩放
+                    self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+                    self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+                    
             else:
-                nn.init.orthogonal_(self.bases_r)
-                nn.init.orthogonal_(self.bases_i)
+                # 同样逻辑，应用于非 var_wise 情况
+                joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                nn.init.orthogonal_(joint_bases)
+                
+                bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                
+                self.bases_r.data.copy_(bases_r_chunk * self.scale)
+                self.bases_i.data.copy_(bases_i_chunk * self.scale)
 
-    # def complex_element_wise_forward(self, x_fft, coeffs):
-    #     if self.var_wise:
-    #         w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
-    #         w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
-    #     else:
-    #         w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
-    #         w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
 
-    #     xr, xi = x_fft.real, x_fft.imag
-    #     z_r = xr * w_r - xi * w_i
-    #     z_i = xr * w_i + xi * w_r
-    #     return torch.complex(z_r, z_i)
-
+    def _get_query(self, x):
+        return self.query_net(x)
+    
     def complex_element_wise_forward(self, x_fft, coeffs):
-        # [关键步骤]：实时归一化 Base
-        # 无论 Base 在训练中变成了多大，这里强制把它拉回单位圆
-        # dim=1 是频率维度，保证每个 Base 在频域的整体能量为 1
-        
-        # 你的 bases 形状可能是 (N_bases, Freq_len, N_var)
-        # 我们希望对每个 Base (N, V) 在频率轴 (F) 上归一化
-        eps = 1e-8
-        
-        # 计算 L2 范数: (N, 1, V)
-        norm_r = torch.norm(self.bases_r, p=2, dim=1, keepdim=True)
-        norm_i = torch.norm(self.bases_i, p=2, dim=1, keepdim=True)
-        
-        # 归一化后的基向量
-        bases_r_unit = self.bases_r / (norm_r + eps)
-        bases_i_unit = self.bases_i / (norm_i + eps)
-
-        # 使用归一化后的基进行聚合
+        """
+        Perform complex element-wise transformation using aggregated bases.
+        x_fft: (B, F, V) - Complex
+        coeffs: (B, V, N)
+        """
         if self.var_wise:
-            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, bases_r_unit)
-            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, bases_i_unit)
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
         else:
-            w_r = torch.einsum('bvn, nf -> bfv', coeffs, bases_r_unit)
-            w_i = torch.einsum('bvn, nf -> bfv', coeffs, bases_i_unit)
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
 
-        # 计算出标准化的残差
-        xr, xi = x_fft.real, x_fft.imag
+        xr, xi = x_fft.real, x_fft.imag # (B, F, V)
         z_r = xr * w_r - xi * w_i
         z_i = xr * w_i + xi * w_r
+              
         return torch.complex(z_r, z_i)
 
     def forward(self, x):
-        B, L, V = x.shape
+        """
+        x shape: (Batch, Window_len, N_var)
+        """
+        B, L, _ = x.shape
 
-        # 1. FFT
-        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  
+        # 1. Transform to Frequency Domain
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')  # (B, F, V)
 
-        # 2. Query & Similarity
-        query = self.query_net(x) 
+        # 2. Query & Codebook Selection
+        query = self._get_query(x) 
         query_norm = F.normalize(query, p=2, dim=-1)
         keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
         
-        # similarity shape: (B, V, N)
+        # Calculate Cosine Similarity
         similarity = torch.matmul(
-            query_norm.unsqueeze(2), 
-            keys_norm.transpose(1, 2)
-        ).squeeze(2)
+            query_norm.unsqueeze(2),         # (B, V, 1, D)
+            keys_norm.transpose(1, 2)        # (V, D, N)
+        ).squeeze(2)                         # (B, V, N)
+        
+        # [Add]: Logic for Confidence Gating (Equation 1)
+        # Calculate s_max for each sample and variable
+        s_max, _ = torch.max(similarity, dim=-1) # (B, V)
+        
+        # gamma = 1 if s_max >= tau else s_max / tau
+        # Note: s_max is cosine similarity. 
+        gamma = torch.where(
+            s_max >= self.confidence_threshold, 
+            torch.ones_like(s_max), 
+            s_max / self.confidence_threshold
+        )
+        # Reshape gamma for broadcasting: (B, V) -> (B, 1, V) to match time domain output
+        gamma = gamma.unsqueeze(1)
 
-        # --- 核心修改：ReLU Hard Gating (硬截断) ---
-        # 1. 获取最大相似度
-        max_sim, _ = torch.max(similarity, dim=-1) # (B, V)
-        
-        # 2. 计算门控值：ReLU(Gain * (Sim - Threshold))
-        # 当 Sim < Threshold 时，Gate 恒为 0
-        gate_raw = F.relu((max_sim - self.conf_threshold) * self.conf_steepness)
-        
-        # 3. 截断到 [0, 1] 之间，防止过度放大
-        conf_gate = torch.clamp(gate_raw, 0.0, 1.0)
-        
-        # 3. Top-K & Softmax
+        # Top-K Softmax Logic
         k = 2 
         topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
         mask = torch.full_like(similarity, float('-inf'))
         mask.scatter_(-1, topk_indices, topk_vals)
-        coeffs = F.softmax(mask, dim=-1) 
+        coeffs = F.softmax(mask, dim=-1) # (B, V, N)
         self.coeffs = coeffs
 
-        # 4. Main Path
+        # 3. Main Path: Codebook-based Frequency Adaptation (Element-Wise)
         delta_fft_codebook = self.complex_element_wise_forward(x_fft, coeffs)
+        
+        # iFFT for Main Path
         delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+        
+        # [Mod]: Apply Confidence Gating (Equation 2)
+        # Y_k = Y_b + gamma * Y_c (Here out_codebook represents Y_k)
+        # x is Y_b, delta_time_codebook is Y_c
+        # We apply gamma scaling to the retrieved residual
+        delta_time_codebook = delta_time_codebook * gamma
 
-        # 应用门控：如果模式不匹配，则不进行校准
-        # delta_time_codebook: (B, L, V), conf_gate: (B, V)
-        delta_time_codebook = delta_time_codebook * conf_gate.unsqueeze(1)
-
-        # 5. Online Path & Final Output
+        # 4. Online Path: Element-wise Frequency Calibration
         if self.online_mode:
-            delta_real_online = (x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r)
-            delta_imag_online = (x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i)
+            delta_real_online = (
+                x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i
+            )
+            
             y_online = torch.complex(delta_real_online, delta_imag_online)
+            
+            # iFFT Online (Y_a in paper)
             delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            
+            # [Mod]: Gating with tanh(lambda) (Equation 4)
+            # The paper specifies: Y_f = Y_k + tanh(lambda) * Y_a
             delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
+
             out = x + delta_time_codebook + delta_time_online
         else:
             out = x + delta_time_codebook
@@ -1611,11 +1634,10 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
             params.append(self.online_bias_r)
             params.append(self.online_bias_i)
             params.append(self.tafas_gating)
-            # params.extend(list(self.query_net.parameters()))
-            # return params, self.query_net.parameters()
         else:
             params.append(self.tafas_gating)
         return params
+
 
 
 class EnCoBA_FreqDomain_GCM(nn.Module):
