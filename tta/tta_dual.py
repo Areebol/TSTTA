@@ -186,12 +186,13 @@ class Adapter(nn.Module):
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             # parts.append(f'{self.cfg.TTA.DUAL.GCM_N_BASES}')
             # parts.append(f'{self.cfg.TTA.DUAL.PRETRAIN_EPOCHS}')
-            parts.append(f'{self.cfg.TTA.DUAL.QUERY_TYPE}')
+            # parts.append(f'{self.cfg.TTA.DUAL.QUERY_TYPE}')
             # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-online")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-norm-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')

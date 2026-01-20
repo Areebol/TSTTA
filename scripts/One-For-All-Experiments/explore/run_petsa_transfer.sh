@@ -13,7 +13,7 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 
-MODELS=("DLinear")
+# MODELS=("DLinear")
 # PRED_LENS=(192)
 # DATASETS=("ETTm1")
 # TARGETS=("ETTm2")
@@ -22,7 +22,7 @@ MODELS=("DLinear")
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
 
 # LRS=(0.005 0.003 0.002 0.001 0.0005 0.0001)
-LRS=(0.005 0.003 0.001 0.0005)
+LRS=(0.005 0.003 0.001 0.0005 0.0001)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)

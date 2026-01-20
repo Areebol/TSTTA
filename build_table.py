@@ -79,7 +79,8 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
     
     # 建立映射
     all_methods = sorted([m for m in df["tta_method"].unique() if m != "None"])
-    method_mapping = {m: excel_colname(i) for i, m in enumerate(all_methods)}
+    # 修改: 从 26 (AA) 开始, 避免 A 排在 AA 前面导致的排序混乱
+    method_mapping = {m: excel_colname(i) for i, m in enumerate(all_methods, 26)}
     method_mapping["None"] = "None"
     
     reverse_mapping = {v: k for k, v in method_mapping.items() if v != "None"}
@@ -94,7 +95,9 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
     )
 
     table = table.sort_index()
-    table = table.sort_index(axis=1)
+    # 修改排序逻辑: 让 None 永远在第一位, 其次按 AA, AB... 顺序排列
+    cols = sorted(table.columns, key=lambda x: (x[0], 0 if x[1] == "None" else 1, x[1]))
+    table = table[cols]
 
     table.to_csv(output_csv)
     print(f"Saved raw summary → {output_csv}")
@@ -194,27 +197,27 @@ def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=N
     legend_data = [[key, val] for key, val in reverse_mapping.items()]
     print(tabulate(legend_data, headers=["ID", "Original Method Name"], tablefmt="simple"))
 
-    print("\n=== Top-1 Counts (Lower MSE is better) ===")
-    top1_df = pd.DataFrame(list(top1_count.items()), columns=["Method ID", "Count"])
-    top1_df = top1_df.sort_values(by="Count", ascending=False)
-    print(tabulate(top1_df, headers="keys", tablefmt="simple"))
+    # print("\n=== Top-1 Counts (Lower MSE is better) ===")
+    # top1_df = pd.DataFrame(list(top1_count.items()), columns=["Method ID", "Count"])
+    # top1_df = top1_df.sort_values(by="Count", ascending=False)
+    # print(tabulate(top1_df, headers="keys", tablefmt="simple"))
 
 if __name__ == "__main__":
     if not os.path.exists("./results"):
         os.makedirs("./results", exist_ok=True)
         
     build_summary_table(
-        input_dir="./results", 
+        input_dir="./results/", 
         output_csv="./results/final_tta_summary.csv", 
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
-        dataset_names=["ETTm1_2_ETTm2"],
-        # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
+        # dataset_names=["ETTm1_2_ETTm2"],
+        dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
-        model_names=["DLinear"] 
+        # model_names=["DLinear", "PatchTST", "FreTS", "iTransformer", "MICN", "OLS", "PatchTST"], 
         # model_names="DLinear"
-        # model_names=None # 设为 None 则显示所有模型
+        model_names=None # 设为 None 则显示所有模型
     )

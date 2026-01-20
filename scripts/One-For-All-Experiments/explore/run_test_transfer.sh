@@ -3,9 +3,9 @@
 ############################################
 # 实验参数
 ############################################
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("DLinear")
+# MODELS=("DLinear")
 # DATASETS=("ETTh1")
 # TARGETS=("ETTh2")
 

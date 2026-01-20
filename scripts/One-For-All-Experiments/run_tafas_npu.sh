@@ -10,15 +10,16 @@ export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-PRED_LENS=(96 192 336 720)
+# PRED_LENS=(96 192 336 720)
+PRED_LENS=(720)
 
-MODELS=("DLinear")
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
+MODELS=("FreTS")
+DATASETS=("ETTm1")
+TARGETS=("ETTm2")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
-# LRS=(0.001)
-LRS=(0.005 0.003 0.001 0.0005)
+LRS=(0.001)
+# LRS=(0.005 0.003 0.001 0.0005)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)
