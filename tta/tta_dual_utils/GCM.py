@@ -70,6 +70,61 @@ class IdentityAdapter(nn.Module):
     def forward(self, x):
         return x
 
+class Fre_GCM(nn.Module):
+    def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True, **args):
+        super(Fre_GCM, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.freq_len = window_len // 2 + 1
+        
+        # 初始化频域校准参数 (实部和虚部)
+        # scale 设为较小值，以保证初始状态接近恒等映射
+        scale = 1e-5
+        
+        if var_wise:
+            # 维度: (1, Freq, Var) 用于广播 Batch 维度
+            self.freq_weight_r = nn.Parameter(scale * torch.randn(1, self.freq_len, n_var))
+            self.freq_weight_i = nn.Parameter(scale * torch.randn(1, self.freq_len, n_var))
+            self.freq_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+            self.freq_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+        else:
+            # 维度: (1, Freq, 1) 广播 Batch 和 Var 维度
+            self.freq_weight_r = nn.Parameter(scale * torch.randn(1, self.freq_len, 1))
+            self.freq_weight_i = nn.Parameter(scale * torch.randn(1, self.freq_len, 1))
+            self.freq_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, 1))
+            self.freq_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, 1))
+
+        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+
+        
+    def forward(self, x):
+        # 1. Transform to Frequency Domain
+        # x: (B, L, V) -> x_fft: (B, F, V)
+        x_fft = torch.fft.rfft(x, dim=1, norm='ortho')
+
+        # 2. Element-wise Complex Calibration in Frequency
+        # (a+bi)(c+di) = (ac-bd) + i(ad+bc)
+        # R = Xr*Wr - Xi*Wi + Br
+        # I = Xr*Wi + Xi*Wr + Bi
+        delta_real = (
+            x_fft.real * self.freq_weight_r - x_fft.imag * self.freq_weight_i + self.freq_bias_r
+        )
+        delta_imag = (
+            x_fft.real * self.freq_weight_i + x_fft.imag * self.freq_weight_r + self.freq_bias_i
+        )
+        
+        delta_fft = torch.complex(delta_real, delta_imag)
+
+        # 3. Transform back to Time Domain
+        delta_x = torch.fft.irfft(delta_fft, n=self.window_len, dim=1, norm='ortho')
+
+        # 4. Gated Residual Connection
+        x = x + torch.tanh(self.gating) * delta_x
+        return x
+
+
+
 class CoBA_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, 
                  gating_init=0.01, var_wise=True,

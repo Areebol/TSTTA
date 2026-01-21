@@ -21,7 +21,7 @@ cache/
 checkpoints
 checkpoints_wonorm/
 checkpoints_wonorm
-checkpoints_revin
+checkpoints*/
 *.npy
 *.png
 *.npz

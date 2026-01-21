@@ -1,12 +1,11 @@
 #!/bin/bash
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# MODELS=("PatchTST")
+MODELS=("iTransformer")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTm2")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(720)
-NORM_MODULE_ENABLE=True
-NORM_MODULE_NAME=RevIN
+
 
 # NPUS=(3)          # 可用的 NPU ID
 NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
@@ -29,13 +28,16 @@ parallel --lb -j ${TOTAL_JOBS} '
     # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
     export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
+    NORM_MODULE_ENABLE=False
+    NORM_MODULE_NAME="RevIN"
+
     python main.py \
         DATA.NAME {2} \
         DATA.PRED_LEN {3} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
         TRAIN.ENABLE True \
-        TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
+        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}/ \
         NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
         NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TTA.ENABLE False \

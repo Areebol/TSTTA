@@ -10,8 +10,6 @@ DATASETS=("ETTm2")
 TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(192)
-NORM_MODULE_ENABLE=True
-NORM_MODULE_NAME=RevIN
 
 
 # NPUS=(3)          # 可用的 NPU ID
@@ -38,6 +36,8 @@ parallel --lb -j ${TOTAL_JOBS} '
 
     # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
     export CUDA_VISIBLE_DEVICES=${NPU_ID}
+    NORM_MODULE_ENABLE=False
+    NORM_MODULE_NAME="RevIN"
 
     python main.py \
         SEED ${SEED} \
@@ -46,8 +46,10 @@ parallel --lb -j ${TOTAL_JOBS} '
         DATA.DOMAIN_SHIFT_TARGET {4} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
+        NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
+        NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TRAIN.ENABLE False \
-        TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
+        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}/ \
         TEST.ENABLE True \
         TTA.ENABLE False \
         TTA.DOMAIN_SHIFT True \

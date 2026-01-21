@@ -437,10 +437,14 @@ class FreqElementWiseCoBALoss(nn.Module):
             
         # 2. Ortho Constraints on Real and Imaginary Bases
         # Constraints are applied per n_var group.
-        l_ortho_r = self.ortho_loss_fn(bases_r)
-        l_ortho_i = self.ortho_loss_fn(bases_i)
+        # l_ortho_r = self.ortho_loss_fn(bases_r)
+        # l_ortho_i = self.ortho_loss_fn(bases_i)
+        # l_total = l_task + self.lambda_ortho * (l_ortho_r + l_ortho_i)
+
+        bases = torch.cat([bases_r, bases_i], dim=1)  # (N, 2F, V)
+        l_ortho = self.ortho_loss_fn(bases)
         
-        l_total = l_task + self.lambda_ortho * (l_ortho_r + l_ortho_i)
+        l_total = l_task + self.lambda_ortho * l_ortho
         
         return l_total
     

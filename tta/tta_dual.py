@@ -236,10 +236,10 @@ class Adapter(nn.Module):
                 lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
                 weight_decay=cfg.SOLVER.WEIGHT_DECAY
             ) 
-            # # optim_params, query_params = self.cali.out_cali.get_optim_params()
+            # optim_params, query_params = self.cali.out_cali.get_optim_params()
             # params_groups = [
             #     {'params': optim_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR},
-            #     {'params': query_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR * 0.5}
+            #     {'params': query_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR * 0.1}
             # ]
             # self.optimizer = torch.optim.Adam(
             #     params_groups,

@@ -507,8 +507,8 @@ class Trainer:
             "cfg": self.cfg.dump(),
         }
         # with open(mkdir(norm_module_cfg.TRAIN.CHECKPOINT_DIR) / 'checkpoint_best.pth', "wb") as f:
-        os.makedirs(os.path.join(self.cfg.TRAIN.CHECKPOINT_DIR, 'revin'), exist_ok=True)
-        with open(mkdir(self.cfg.TRAIN.CHECKPOINT_DIR) / 'revin' / 'checkpoint_best.pth', "wb") as f:
+        os.makedirs(os.path.join(self.cfg.TRAIN.CHECKPOINT_DIR, self.cfg.NORM_MODULE.NAME.lower()), exist_ok=True)
+        with open(mkdir(self.cfg.TRAIN.CHECKPOINT_DIR) / self.cfg.NORM_MODULE.NAME.lower() / 'checkpoint_best.pth', "wb") as f:
             torch.save(checkpoint, f)
 
     def load_best_model(self):

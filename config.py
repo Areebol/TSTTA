@@ -409,7 +409,7 @@ def get_cfg_defaults():
 
 def get_norm_module_cfg(cfg):
     norm_cfg = getattr(cfg, cfg.NORM_MODULE.NAME.upper())
-    norm_cfg.TRAIN.CHECKPOINT_DIR = cfg.TRAIN.CHECKPOINT_DIR + "/revin"
+    norm_cfg.TRAIN.CHECKPOINT_DIR = cfg.TRAIN.CHECKPOINT_DIR + f"/{cfg.NORM_MODULE.NAME.lower()}"
     return norm_cfg
 
 
