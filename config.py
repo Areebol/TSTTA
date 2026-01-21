@@ -320,7 +320,7 @@ _C.MODEL.num_class = 1
 
 _C.NORM_MODULE = CN()
 _C.NORM_MODULE.ENABLE = False  # NST
-_C.NORM_MODULE.NAME = 'SAN'  # SAN, RevIN, DishTS
+_C.NORM_MODULE.NAME = 'RevIN'  # SAN, RevIN, DishTS
 
 _C.SAN = CN()
 _C.SAN.RESULT_DIR = 'results/station/'
@@ -408,7 +408,9 @@ def get_cfg_defaults():
 
 
 def get_norm_module_cfg(cfg):
-    return getattr(cfg, cfg.NORM_MODULE.NAME.upper())
+    norm_cfg = getattr(cfg, cfg.NORM_MODULE.NAME.upper())
+    norm_cfg.TRAIN.CHECKPOINT_DIR = cfg.TRAIN.CHECKPOINT_DIR + "/revin"
+    return norm_cfg
 
 
 def get_norm_method(cfg):

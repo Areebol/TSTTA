@@ -53,12 +53,13 @@ def save_best_model(cfg, model, optimizer, epoch=0, best_metric=0.0):
 
 
 def load_best_model(cfg, model):
-    if cfg.TRAIN.RESUME == '':
-        model_path = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, "checkpoint_best.pth")
-    elif cfg.TRAIN.FINETUNE:
-        model_path = os.path.join(cfg.TRAIN.FINETUNE_DIR, '{}_best.pth'.format(cfg.DATA.TYPE))
-    else:
-        model_path = cfg.TRAIN.RESUME
+    # if cfg.TRAIN.RESUME == '':
+    #     model_path = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, "checkpoint_best.pth")
+    # elif cfg.TRAIN.FINETUNE:
+    #     model_path = os.path.join(cfg.TRAIN.FINETUNE_DIR, '{}_best.pth'.format(cfg.DATA.TYPE))
+    # else:
+    #     model_path = cfg.TRAIN.RESUME
+    model_path = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, "checkpoint_best.pth")
     try:
         print(f"Debug: model_path = {model_path}")
         checkpoint = torch.load(model_path, map_location="cpu")
