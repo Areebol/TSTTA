@@ -10,9 +10,9 @@ export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("DLinear")
-DATASETS=("ETTh2")
-TARGETS=("ETTh1")
+MODELS=("iTransformer")
+DATASETS=("ETTm2")
+TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
 # LRS=(0.5 0.3 0.1 0.08)

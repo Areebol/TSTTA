@@ -5,11 +5,14 @@
 ############################################
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("DLinear")
-DATASETS=("ETTh1")
-TARGETS=("ETTh2")
+MODELS=("iTransformer")
+DATASETS=("ETTm2")
+TARGETS=("ETTm1")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(192)
+NORM_MODULE_ENABLE=True
+NORM_MODULE_NAME=RevIN
+
 
 # NPUS=(3)          # 可用的 NPU ID
 NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID

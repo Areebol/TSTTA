@@ -19,6 +19,9 @@ temp/
 cache/
 *visualize*
 checkpoints
+checkpoints_wonorm/
+checkpoints_wonorm
+checkpoints_revin
 *.npy
 *.png
 *.npz

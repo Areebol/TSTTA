@@ -1,17 +1,18 @@
 #!/bin/bash
-# MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("PatchTST")
+MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+# MODELS=("PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-PRED_LENS=(96 192 336 720)
-MODELS=("MICN")
 DATASETS=("ETTm2")
-PRED_LENS=(720)
+PRED_LENS=(96 192 336 720)
+# PRED_LENS=(720)
+NORM_MODULE_ENABLE=True
+NORM_MODULE_NAME=RevIN
 
-NPUS=(1 2 3)
-NNPU=${#NPUS[@]}   # NPU 数量
+# NPUS=(3)          # 可用的 NPU ID
+NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
+NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=8
-
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -25,7 +26,8 @@ parallel --lb -j ${TOTAL_JOBS} '
     NPU_ID=${npu_array[$slot_idx]}
 
     echo "Job slot {%}: Running on NPU ${NPU_ID} (MODEL={1}, DATASET={2}, PRED={3})"
-    export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
         DATA.NAME {2} \
@@ -34,6 +36,8 @@ parallel --lb -j ${TOTAL_JOBS} '
         MODEL.pred_len {3} \
         TRAIN.ENABLE True \
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
+        NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
+        NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TTA.ENABLE False \
         TEST.ENABLE False
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
