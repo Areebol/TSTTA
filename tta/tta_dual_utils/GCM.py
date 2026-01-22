@@ -1965,17 +1965,18 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         if query_type == 'time':
             self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
         elif query_type == 'freq-base-CI':
-            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len + 96, n_var, feature_dim)
         # ... (保留其他 query_type 的判断) ...
         else:
             # Default fallback
             print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
-            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len + 96, n_var, feature_dim)
 
         # --- 3. Online Mode Parameters ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
         
         # 注意：因为现在是在归一化空间操作，这些参数的初始化变得更加安全有效
+        self.freq_len = self.freq_len + 96 // 2 # take input as window_len + 96
         self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -2043,6 +2044,7 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
             # 3. 构造 "内部工作变量" (Internal Normalized Variable)
             # x_internal 是标准正态分布 N(0,1)，Adapter 在这个舒适区工作
             x_internal = (x_base - base_mean) / base_std 
+            x_enc_norm = (x_enc - input_mean) / input_std
             
             # 4. 构造 "对齐后的基底" (Aligned Base)
             # 将 Base Model 的输出强行拉伸到真实的量纲
@@ -2065,6 +2067,9 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         # 2. Query & Codebook Selection
         # QueryNet 看到的也是归一化的数据，保证检索稳定性
         query = self._get_query(x_internal) 
+        # adapter_ins = torch.cat([x_enc_norm, x_internal], dim=1)
+        # query = self._get_query(adapter_ins) 
+        
         query_norm = F.normalize(query, p=2, dim=-1)
         keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
         
@@ -2075,8 +2080,8 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         ).squeeze(2)                     # (B, V, N)
         
         # [Add]: Logic for Confidence Gating
-        s_max, _ = torch.max(similarity, dim=-1) # (B, V)
-        s_max = F.relu(s_max)
+        # s_max, _ = torch.max(similarity, dim=-1) # (B, V)
+        # s_max = F.relu(s_max)
         
         # gamma = torch.where(
         #     s_max >= self.confidence_threshold, 
@@ -2112,6 +2117,8 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         if self.online_mode:
             # 这里的 x_fft 是归一化的，所以 online_freq 参数只需要在 1e-5 附近微调
             # 梯度非常稳定，收敛快
+            adapter_ins = torch.cat([x_enc_norm, x_internal], dim=1)
+            x_fft = torch.fft.rfft(adapter_ins, dim=1, norm='ortho')  # (B, F, V)
             delta_real_online = (
                 x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
             )
@@ -2122,7 +2129,9 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
             y_online = torch.complex(delta_real_online, delta_imag_online)
             
             # iFFT Online
-            delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            # delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            delta_time_online = torch.fft.irfft(y_online, n=adapter_ins.size(1), dim=1, norm='ortho')
+            delta_time_online = delta_time_online[:, -L:, :]
             
             # Gating with tanh(lambda)
             delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online

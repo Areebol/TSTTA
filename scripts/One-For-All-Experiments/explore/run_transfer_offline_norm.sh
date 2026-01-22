@@ -9,17 +9,17 @@ NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("iTransformer")
+# MODELS=("iTransformer")
 
 # 固定迁移对: Source:Target
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
-PAIRS=("ETTm2:ETTm1")
+# PAIRS=("ETTm2:ETTm1")
 
 PRED_LENS=(96 192 336 720)
 BASE_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
-LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
+LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
 
 LAMBDA_ORTHO=(1e-2)
 QUERY_TYPES=("freq-base-CI")
