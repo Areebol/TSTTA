@@ -1626,6 +1626,7 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
         # [Add]: Logic for Confidence Gating (Equation 1)
         # Calculate s_max for each sample and variable
         s_max, _ = torch.max(similarity, dim=-1) # (B, V)
+        s_max = F.relu(s_max)
         
         # gamma = 1 if s_max >= tau else s_max / tau
         # Note: s_max is cosine similarity. 
@@ -1689,6 +1690,10 @@ class RoCoBA_FreqDomain_GCM(nn.Module):
             params.append(self.online_bias_r)
             params.append(self.online_bias_i)
             params.append(self.tafas_gating)
+            # params.extend(list(self.query_net.parameters()))
+            # params.append(self.codebook_keys)
+            # params.append(self.bases_r)
+            # params.append(self.bases_i)
         else:
             params.append(self.tafas_gating)
         return params
