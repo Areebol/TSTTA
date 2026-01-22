@@ -49,7 +49,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
         NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TRAIN.ENABLE False \
-        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}/ \
+        TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
         TEST.ENABLE True \
         TTA.ENABLE False \
         TTA.DOMAIN_SHIFT True \

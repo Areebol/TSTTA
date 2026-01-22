@@ -49,13 +49,14 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'CoBA_FreqDomain_ElementWise_GCM': CoBA_FreqDomain_ElementWise_GCM,
         'RoCoBA_FreqDomain_GCM': RoCoBA_FreqDomain_GCM,
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
+        'RoCoBA_FreqDomain_Norm': RoCoBA_FreqDomain_Norm,
     }
     if model_type == 'coba-GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
@@ -163,7 +164,15 @@ class Adapter(nn.Module):
         #     parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         parts = []
-        if self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+        if self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("ro-coba-feq-norm-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            parts.append("ro-coba-feq-norm-online")
+            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
@@ -195,13 +204,7 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-ew-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-ew-norm-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-ElementWise-NormQ' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-ew-norm-online")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')            
         elif self.cfg.TTA.DUAL.CALI_NAME == 'coba-online-only':
             parts.append("coba-online-only")
             parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
@@ -278,7 +281,10 @@ class Adapter(nn.Module):
                     inputs = self.cali.input_calibration(inputs)
                 pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
                 if self.cali.output_calibration is not None:
-                    pred = self.cali.output_calibration(pred)
+                    if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
+                        pred = self.cali.output_calibration(pred, enc_window_all)
+                    else:
+                        pred = self.cali.output_calibration(pred)
                 if isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
                 elif isinstance(self.loss_fn, LowRankCoBALoss):
@@ -337,7 +343,11 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    pred = self.cali.output_calibration(pred)
+                    if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
+                        enc_history = prepare_inputs(inputs_history)[0]
+                        pred = self.cali.output_calibration(pred, enc_history)
+                    else:
+                        pred = self.cali.output_calibration(pred)
                     
                 if isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
@@ -366,7 +376,11 @@ class Adapter(nn.Module):
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
-                pred = self.cali.output_calibration(pred)
+                if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
+                    enc_window = prepare_inputs(inputs)[0]
+                    pred = self.cali.output_calibration(pred, enc_window)
+                else:
+                    pred = self.cali.output_calibration(pred)
                 
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
             if isinstance(self.loss_fn, CoBA_Loss):
@@ -390,7 +404,11 @@ class Adapter(nn.Module):
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
-            pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
+            if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
+                enc_window = prepare_inputs(inputs)[0]
+                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
+            else:
+                pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
         
         for i in range(batch_size-1):
             pred[i, period-i:] = pred_after_adapt[i, period-i:]

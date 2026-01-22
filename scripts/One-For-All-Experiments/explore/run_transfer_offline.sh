@@ -9,9 +9,11 @@ NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
+MODELS=("iTransformer")
 
 # 固定迁移对: Source:Target
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
+PAIRS=("ETTm2:ETTm1")
 
 PRED_LENS=(96 192 336 720)
 BASE_NUMS=(32)

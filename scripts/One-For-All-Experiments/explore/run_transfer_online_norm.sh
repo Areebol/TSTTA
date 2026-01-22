@@ -9,7 +9,7 @@ NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-# MODELS=("PatchTST")
+MODELS=("iTransformer")
 
 # 固定迁移对: Source:Target
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
@@ -20,7 +20,7 @@ BASE_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 OFFLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
-ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005)
+# ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005)
 OFFLINE_LRS=(0.03)
 ONLINE_LRS=(0.001 0.005 0.01 0.03 0.05)
 
@@ -78,7 +78,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.DUAL.PRETRAIN_EPOCHS 2 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_GCM \
+    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_Norm \
     TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \

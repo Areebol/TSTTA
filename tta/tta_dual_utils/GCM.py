@@ -825,7 +825,9 @@ class CalibrationContainer(nn.Module):
             
         return enc_window, enc_window_stamp, dec_window, dec_window_stamp
 
-    def output_calibration(self, outputs):
+    def output_calibration(self, outputs, inputs=None):
+        if inputs is not None and self.in_cali is not None:
+            outputs = self.out_cali(outputs, inputs)
         if self.out_cali is not None:
             return self.out_cali(outputs)
         return outputs
@@ -1908,3 +1910,241 @@ class EnCoBA_FreqDomain_GCM(nn.Module):
             params.append(self.tafas_gating)
         return params
 
+
+
+class RoCoBA_FreqDomain_Norm(nn.Module):
+    """
+    Revised Version: Implements Statistical Alignment & Normalized Residual Learning
+    
+    1. Main Path (Codebook): 
+       Input (Norm) -> FFT -> Query -> Select Freq Domain Bases -> iFFT -> Residual (Norm)
+    
+    2. Online Path (Test-time Adaptation):
+       Input (Norm) -> FFT -> Per-Variable Freq Transform -> iFFT -> Gated Residual (Norm)
+       
+    3. Output:
+       Base_Aligned + (Residual_Codebook + Residual_Online) * Input_Std
+    """
+    def __init__(self, window_len, n_var=1, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI', 
+                 confidence_threshold=0.5, **kwargs):
+        super(RoCoBA_FreqDomain_Norm, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        # self.analyzer = CoBA_Analyzer(self) # 假设你有这个类，保留
+        self.freq_len = window_len // 2 + 1
+        
+        # [Add]: Confidence Threshold (tau) for Knowledge Retrieval
+        self.confidence_threshold = confidence_threshold
+        
+        # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
+        
+        if var_wise:
+            # Bases: (N_bases, Freq_len, N_var)
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+        else:
+            # Bases: (N_bases, Freq_len)
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+
+        # Initialization
+        self.scale = 1e-5
+        self._init_bases()
+        
+        # --- Query Net Selection Logic (Factory) ---
+        print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
+        # (保留你原来的 QueryNet 初始化逻辑，这里简化展示)
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        # ... (保留其他 query_type 的判断) ...
+        else:
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+
+        # --- 3. Online Mode Parameters ---
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        
+        # 注意：因为现在是在归一化空间操作，这些参数的初始化变得更加安全有效
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
+
+    def _init_bases(self):
+        with torch.no_grad():
+            if self.var_wise:
+                for v in range(self.n_var):
+                    joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                    nn.init.orthogonal_(joint_bases)
+                    bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                    self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+                    self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+            else:
+                joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                nn.init.orthogonal_(joint_bases)
+                bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                self.bases_r.data.copy_(bases_r_chunk * self.scale)
+                self.bases_i.data.copy_(bases_i_chunk * self.scale)
+
+    def _get_query(self, x):
+        return self.query_net(x)
+    
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+
+        xr, xi = x_fft.real, x_fft.imag 
+        z_r = xr * w_r - xi * w_i
+        z_i = xr * w_i + xi * w_r
+              
+        return torch.complex(z_r, z_i)
+
+    def forward(self, x_base, x_enc=None):
+        """
+        Modified forward to handle Statistical Alignment.
+        
+        Args:
+            x_base: Output from Pre-trained Model (e.g., iTransformer). 
+                    Shape: (Batch, Window_len, N_var).
+                    Issue: May have incorrect scale/shift (e.g., ~1.0 vs ~700.0).
+            x_enc:  Original Input Sequence. 
+                    Shape: (Batch, Seq_Len, N_var).
+                    Role: Provides ground-truth statistics for alignment.
+        """
+        B, L, _ = x_base.shape
+
+        # =======================================================
+        # [Phase 0]: Statistical Alignment (统计量对齐)
+        # =======================================================
+        if x_enc is not None:
+            # 1. 计算输入的真实统计量 (Ground Truth Statistics)
+            input_mean = x_enc.mean(dim=1, keepdim=True)
+            input_std = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True) + 1e-5)
+            
+            # 2. 计算 Base Model 输出的统计量 (Biased Statistics)
+            base_mean = x_base.mean(dim=1, keepdim=True)
+            base_std = torch.sqrt(torch.var(x_base, dim=1, keepdim=True) + 1e-5)
+            
+            # 3. 构造 "内部工作变量" (Internal Normalized Variable)
+            # x_internal 是标准正态分布 N(0,1)，Adapter 在这个舒适区工作
+            x_internal = (x_base - base_mean) / base_std 
+            
+            # 4. 构造 "对齐后的基底" (Aligned Base)
+            # 将 Base Model 的输出强行拉伸到真实的量纲
+            x_aligned = x_internal * input_std + input_mean
+        else:
+            # 如果没有提供 input (例如非迁移场景或为了兼容旧代码)
+            # 退化为原始逻辑，但会有量纲风险
+            x_internal = x_base
+            x_aligned = x_base
+            input_std = 1.0 
+
+        # =======================================================
+        # [Phase 1]: Frequency Domain Processing (on Normalized Data)
+        # =======================================================
+        # 注意：这里我们使用 x_internal (N(0,1)) 进行变换
+        
+        # 1. Transform to Frequency Domain
+        x_fft = torch.fft.rfft(x_internal, dim=1, norm='ortho')  # (B, F, V)
+
+        # 2. Query & Codebook Selection
+        # QueryNet 看到的也是归一化的数据，保证检索稳定性
+        query = self._get_query(x_internal) 
+        query_norm = F.normalize(query, p=2, dim=-1)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        
+        # Calculate Cosine Similarity
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2),         # (B, V, 1, D)
+            keys_norm.transpose(1, 2)        # (V, D, N)
+        ).squeeze(2)                     # (B, V, N)
+        
+        # [Add]: Logic for Confidence Gating
+        s_max, _ = torch.max(similarity, dim=-1) # (B, V)
+        s_max = F.relu(s_max)
+        
+        gamma = torch.where(
+            s_max >= self.confidence_threshold, 
+            torch.ones_like(s_max), 
+            s_max / self.confidence_threshold
+        )
+        gamma = gamma.unsqueeze(1)
+
+        # Top-K Softmax Logic
+        k = 2 
+        topk_vals, topk_indices = torch.topk(similarity, k=k, dim=-1)
+        mask = torch.full_like(similarity, float('-inf'))
+        mask.scatter_(-1, topk_indices, topk_vals)
+        coeffs = F.softmax(mask, dim=-1) # (B, V, N)
+        self.coeffs = coeffs
+
+        # 3. Main Path: Codebook-based Frequency Adaptation (Element-Wise)
+        delta_fft_codebook = self.complex_element_wise_forward(x_fft, coeffs)
+        
+        # iFFT for Main Path
+        delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+        
+        # Apply Confidence Gating
+        # 此时 delta_time_codebook 是 "归一化的残差"
+        delta_time_codebook = delta_time_codebook * gamma
+
+        # =======================================================
+        # [Phase 2]: Online Adaptation (on Normalized Data)
+        # =======================================================
+        # 4. Online Path: Element-wise Frequency Calibration
+        if self.online_mode:
+            # 这里的 x_fft 是归一化的，所以 online_freq 参数只需要在 1e-5 附近微调
+            # 梯度非常稳定，收敛快
+            delta_real_online = (
+                x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft.imag * self.online_freq_r + x_fft.real * self.online_freq_i + self.online_bias_i
+            )
+            
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            
+            # iFFT Online
+            delta_time_online = torch.fft.irfft(y_online, n=L, dim=1, norm='ortho')
+            
+            # Gating with tanh(lambda)
+            delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
+
+            # 融合归一化残差
+            total_residual_norm = delta_time_codebook + delta_time_online
+        else:
+            total_residual_norm = delta_time_codebook
+
+        # =======================================================
+        # [Phase 3]: Final Rescaling (恢复量纲)
+        # =======================================================
+        # out = 对齐后的基底 + (归一化残差 * 真实波动幅度)
+        out = x_aligned + total_residual_norm * input_std
+
+        return out
+
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
+        else:
+            params.append(self.tafas_gating)
+        return params

@@ -12,17 +12,19 @@ MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 # DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
-# MODELS=("DLinear")
+MODELS=("iTransformer")
 # DATASETS=("ETTm2")
 # TARGETS=("ETTm1")
 
 # 固定迁移对: Source:Target
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
+PAIRS=("ETTm2:ETTm1")
 
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
 # LRS=(0.001)
-LRS=(0.005 0.003 0.001 0.0005)
+# LRS=(0.005 0.003 0.001 0.0005)
+LRS=(0.003)
 
 parallel --lb -j ${TOTAL_JOBS} '
     npu_array=($NPU_STR)
