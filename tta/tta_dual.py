@@ -228,7 +228,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
@@ -270,6 +270,9 @@ class Adapter(nn.Module):
                 lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
                 weight_decay=cfg.SOLVER.WEIGHT_DECAY
             ) 
+        else:
+            print("No adapter pre-training needed.")
+
     
     def _pretrain_adapter(self):
         self._switch_model_to_train()
@@ -282,6 +285,7 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
+                        assert enc_window_all is not None, "enc_window_all should not be None for RoCoBA_FreqDomain_Norm"
                         pred = self.cali.output_calibration(pred, enc_window_all)
                     else:
                         pred = self.cali.output_calibration(pred)

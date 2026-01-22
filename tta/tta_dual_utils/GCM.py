@@ -826,8 +826,9 @@ class CalibrationContainer(nn.Module):
         return enc_window, enc_window_stamp, dec_window, dec_window_stamp
 
     def output_calibration(self, outputs, inputs=None):
-        if inputs is not None and self.in_cali is not None:
+        if inputs is not None and self.out_cali is not None:
             outputs = self.out_cali(outputs, inputs)
+            return outputs
         if self.out_cali is not None:
             return self.out_cali(outputs)
         return outputs
@@ -2077,12 +2078,12 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         s_max, _ = torch.max(similarity, dim=-1) # (B, V)
         s_max = F.relu(s_max)
         
-        gamma = torch.where(
-            s_max >= self.confidence_threshold, 
-            torch.ones_like(s_max), 
-            s_max / self.confidence_threshold
-        )
-        gamma = gamma.unsqueeze(1)
+        # gamma = torch.where(
+        #     s_max >= self.confidence_threshold, 
+        #     torch.ones_like(s_max), 
+        #     s_max / self.confidence_threshold
+        # )
+        # gamma = gamma.unsqueeze(1)
 
         # Top-K Softmax Logic
         k = 2 
@@ -2100,7 +2101,9 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         
         # Apply Confidence Gating
         # 此时 delta_time_codebook 是 "归一化的残差"
-        delta_time_codebook = delta_time_codebook * gamma
+        # gamma = 1.0
+        # delta_time_codebook = delta_time_codebook * gamma
+        delta_time_codebook = delta_time_codebook
 
         # =======================================================
         # [Phase 2]: Online Adaptation (on Normalized Data)
