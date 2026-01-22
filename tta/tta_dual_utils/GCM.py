@@ -1965,12 +1965,12 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         if query_type == 'time':
             self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
         elif query_type == 'freq-base-CI':
-            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len + 96, n_var, feature_dim)
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
         # ... (保留其他 query_type 的判断) ...
         else:
             # Default fallback
             print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
-            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len + 96, n_var, feature_dim)
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
         # --- 3. Online Mode Parameters ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
