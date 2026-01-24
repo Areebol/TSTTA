@@ -63,6 +63,11 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'query_type': cfg.TTA.DUAL.QUERY_TYPE,
         }
         params.update(coba_params)
+    elif model_type in ['RoCoBA_FreqDomain_Norm']:
+        coba_params = {
+            'seq_len': cfg.DATA.SEQ_LEN,
+        }
+        params.update(coba_params)
     elif model_type == 'identity':
         return CalibrationContainer(None, None)
 
