@@ -9,7 +9,7 @@ NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("iTransformer")
+MODELS=("DLinear")
 
 # 固定迁移对: Source:Target
 PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
@@ -21,7 +21,7 @@ BASE_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
-LRS=(1e-1 5e-2 3e-2 1e-2 5e-3)
+LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
 
 LAMBDA_ORTHO=(1e-2)
 QUERY_TYPES=("freq-base-CI")
