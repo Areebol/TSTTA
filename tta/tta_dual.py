@@ -19,10 +19,15 @@ from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
 
+import csv
+import os
+import datetime
 
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
+        if cfg.DATA.NAME == 'eVED':
+            n_var = 2
         n_var = 1 if is_patchtst else cfg.DATA.N_VAR
         return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
     
@@ -429,6 +434,11 @@ class Adapter(nn.Module):
         self.mse_per_var_all = np.concatenate(self.mse_per_var_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
         
+        # 计算均值
+        mse_mean = self.mse_all.mean()
+        mae_mean = self.mae_all.mean()
+        mse_per_channel = self.mse_per_var_all.mean(axis=0)
+
         dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
         save_tta_results(
             tta_method=self.save_name,
@@ -445,6 +455,55 @@ class Adapter(nn.Module):
         print(f"Final {tta_method} TTA Results for pred_len: {self.cfg.DATA.PRED_LEN}:")
         print(f"MSE mean: {self.mse_all.mean()}")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
+
+        # =========================================================
+        # 3. 新增：将结果追加保存到 CSV 文件中
+        # =========================================================
+        
+        # 定义 CSV 保存路径 (保存在 RESULT_DIR 下)
+        csv_file_path = os.path.join(self.cfg.RESULT_DIR, "experiment_summary.csv")
+        
+        # 确保目录存在
+        os.makedirs(self.cfg.RESULT_DIR, exist_ok=True)
+
+        # 提取各个 Channel 的 MSE (针对 eVED 这种多变量)
+        # 如果只有 1 个变量，ch1_mse 设为 0
+        ch0_mse = mse_per_channel[0] if len(mse_per_channel) > 0 else 0.0
+        ch1_mse = mse_per_channel[1] if len(mse_per_channel) > 1 else 0.0
+        
+        # 准备要保存的数据行
+        row_data = {
+            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Dataset": dataset_name,
+            "Method": self.cfg.TTA.METHOD,
+            "Cali_Name": getattr(self.cfg.TTA.DUAL, 'CALI_NAME', 'N/A'),
+            # 关键超参数
+            "Base_LR": f"{self.cfg.TTA.SOLVER.BASE_LR:.1e}",
+            "Online_LR": f"{self.cfg.TTA.DUAL.COBA_ONLINE_LR:.1e}",
+            "Pretrain_Epochs": self.cfg.TTA.DUAL.PRETRAIN_EPOCHS,
+            "Steps": self.cfg.TTA.DUAL.STEPS,
+            "Batch_Size": self.cfg.TRAIN.BATCH_SIZE, # 注意这里取的是 Train/Online Batch Size
+            "Lambda_Ortho": getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 'N/A'),
+            # 结果指标
+            "MSE_Mean": f"{mse_mean:.6f}",
+            "Speed_MSE (Ch0)": f"{ch0_mse:.6f}",
+            "Energy_MSE (Ch1)": f"{ch1_mse:.6f}",
+        }
+
+        # 写入 CSV
+        file_exists = os.path.isfile(csv_file_path)
+        try:
+            with open(csv_file_path, mode='a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=row_data.keys())
+                
+                # 如果文件不存在，先写入表头
+                if not file_exists:
+                    writer.writeheader()
+                
+                writer.writerow(row_data)
+            print(f"[Success] Experiment results appended to: {csv_file_path}")
+        except Exception as e:
+            print(f"[Error] Failed to save CSV: {e}")
     
     def adapt(self):
         if getattr(self, "is_eved_like", False):

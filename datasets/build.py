@@ -66,6 +66,7 @@ def build_dataset(cfg, split):
     elif data_name == 'ETTm2':
         dataset = ETTm2(**dataset_config)
     elif data_name == 'eVED':
+        dataset_config['data_dir'] = "/wenzhiquan/dengzeshuai/datasets/eved-dataset/data/segmented_1s_eVED_v9"
         dataset_config.update({
             "train_vehicle_ids": cfg.DATA.TRAIN_VEHICLE_IDS if cfg.DATA.TRAIN_VEHICLE_IDS else None,
             "val_vehicle_ids": cfg.DATA.VAL_VEHICLE_IDS if cfg.DATA.VAL_VEHICLE_IDS else None,

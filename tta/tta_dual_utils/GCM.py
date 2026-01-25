@@ -13,6 +13,11 @@ import math
 from device_manager import global_device
 from tta.tta_dual_utils.query_net import *
 
+eved_enable = True
+import logging
+if eved_enable:
+    logging.warning("\ntta enable in eVED mode. \nIf not using eVED, please set eved_enable = False in tta_dual_utils/GCM.py\n")
+
 class tafas_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True, **args):
         super(tafas_GCM, self).__init__()
@@ -1979,7 +1984,13 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
         
         # 注意：因为现在是在归一化空间操作，这些参数的初始化变得更加安全有效
-        self.freq_len = self.freq_len + self.seq_len // 2 # take input as window_len + 96
+        # self.freq_len = self.freq_len + self.seq_len // 2 # take input as window_len + 96
+
+        if eved_enable:
+            self.freq_len = self.freq_len + 24 // 2 # take input as window_len + 96
+        else:
+            self.freq_len = self.freq_len + 96 // 2 # take input as window_len + 96
+        
         self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -2034,6 +2045,42 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
 
         # =======================================================
         # [Phase 1]: Frequency Domain Processing
+        # [Phase 0]: Statistical Alignment (统计量对齐)
+        # =======================================================
+        if x_enc is not None:
+            # 1. 计算输入的真实统计量 (Ground Truth Statistics)
+            input_mean = x_enc.mean(dim=1, keepdim=True)
+            input_std = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True) + 1e-5)
+            
+            # 2. 计算 Base Model 输出的统计量 (Biased Statistics)
+            base_mean = x_base.mean(dim=1, keepdim=True)
+            base_std = torch.sqrt(torch.var(x_base, dim=1, keepdim=True) + 1e-5)
+            
+            # 3. 构造 "内部工作变量" (Internal Normalized Variable)
+            # x_internal 是标准正态分布 N(0,1)，Adapter 在这个舒适区工作
+            x_internal = (x_base - base_mean) / base_std 
+            x_enc_norm = (x_enc - input_mean) / input_std
+            
+            # 4. 构造 "对齐后的基底" (Aligned Base)
+            # 将 Base Model 的输出强行拉伸到真实的量纲
+            if eved_enable: # 在eVED上设置
+                # input_std = input_std[:, :, -2:]  
+                # input_mean = input_mean[:, :, -2:]  
+
+                target_idx = [12, 13]  
+                # 选取指定通道，而不是最后两个
+                input_std = input_std[:, :, target_idx]  
+                input_mean = input_mean[:, :, target_idx]  
+            x_aligned = x_internal * input_std + input_mean
+        else:
+            # 如果没有提供 input (例如非迁移场景或为了兼容旧代码)
+            # 退化为原始逻辑，但会有量纲风险
+            x_internal = x_base
+            x_aligned = x_base
+            input_std = 1.0 
+
+        # =======================================================
+        # [Phase 1]: Frequency Domain Processing (on Normalized Data)
         # =======================================================
         
         # 1. Transform to Frequency Domain
@@ -2093,7 +2140,17 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         if self.online_mode:
             # 这里的 x_fft 是归一化的，所以 online_freq 参数只需要在 1e-5 附近微调
             # 梯度非常稳定，收敛快
+            # print(x_enc_norm.shape, x_internal.shape)
+
+            if eved_enable:
+                # x_enc_norm = x_enc_norm[:,:,-2:]
+                
+                target_idx = [12, 13]
+                x_enc = x_enc[:, :, target_idx]
             adapter_ins = torch.cat([x_enc, x_base], dim=1)
+
+            # adapter_ins = torch.cat([x_enc, x_base], dim=1)
+
             x_fft = torch.fft.rfft(adapter_ins, dim=1, norm='ortho')  # (B, F, V)
             delta_real_online = (
                 x_fft.real * self.online_freq_r - x_fft.imag * self.online_freq_i + self.online_bias_r
