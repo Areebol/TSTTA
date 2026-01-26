@@ -152,7 +152,7 @@ class QueryNet_Freq_Base_ChannelIndependence(nn.Module):
         # 2. 我们希望对每个变量独立处理，使用 Shared MLP (对 dim=-1 作用)
         self.net = nn.Sequential(
             nn.Linear(fft_len, feature_dim * 2),
-            nn.GELU(), # 建议加上激活函数，增加非线性能力
+            # nn.GELU(), # 建议加上激活函数，增加非线性能力
             nn.Linear(feature_dim * 2, feature_dim)
         )
 

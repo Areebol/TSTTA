@@ -128,7 +128,7 @@ class Fre_GCM(nn.Module):
 class CoBA_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, 
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32):
+                 n_bases=8, feature_dim=32, query_type='freq-base-CD'):
         super(CoBA_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -146,12 +146,32 @@ class CoBA_GCM(nn.Module):
         
         nn.init.xavier_uniform_(self.bases) 
 
-        fft_len = window_len // 2 + 1
-        self.query_net = nn.Sequential(
-            nn.Linear(fft_len * n_var, feature_dim * 2),
-            # nn.GELU(),
-            nn.Linear(feature_dim * 2, feature_dim)
-        )
+        # fft_len = window_len // 2 + 1
+        # self.query_net = nn.Sequential(
+        #     nn.Linear(fft_len * n_var, feature_dim * 2),
+        #     # nn.GELU(),
+        #     nn.Linear(feature_dim * 2, feature_dim)
+        # )
+
+        # --- Query Net ---
+        # --- Query Net Selection Logic (Factory) ---
+        print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-separate-CI':
+            self.query_net = QueryNet_Freq_Separate_ChannelIndependence(window_len, n_var, feature_dim)
+        elif query_type == 'freq-mag-phase':
+            self.query_net = QueryNet_Freq_MagPhase(window_len, n_var, feature_dim)
+        elif query_type == 'freq-norm-CI':
+            self.query_net = QueryNet_Freq_Norm_ChannelIndependence(window_len, n_var, feature_dim)
+        else:
+            # Default fallback
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
 
         # self.gating = nn.Parameter(gating_init * torch.ones(n_var))
         self.bias = nn.Parameter(torch.zeros(window_len, n_var))
