@@ -12,7 +12,7 @@ import time
 
 from models.optimizer import get_optimizer
 from models.forecast import forecast
-from datasets.loader import get_test_dataloader
+from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
 import matplotlib.pyplot as plt
@@ -38,9 +38,25 @@ class DynaTTAAdapter(nn.Module):
 
         self.model_state, self.opt_state = self._copy_state()
 
-        batch_size = len(get_test_dataloader(cfg).dataset)
-        self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
-        self.test_data = self.test_loader.dataset.test
+        # batch_size = len(get_test_dataloader(cfg).dataset)
+        # self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
+        # self.test_data = self.test_loader.dataset.test
+
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg)
+        else:
+            self.test_loader = get_test_dataloader(cfg)
+
+        if hasattr(self.test_loader.dataset, "get_test_num_windows"):
+            test_num_windows = self.test_loader.dataset.get_test_num_windows()
+            batch_size = test_num_windows
+        else:
+            batch_size = len(self.test_loader.dataset)
+
+        if cfg.TTA.DOMAIN_SHIFT:
+            self.test_loader = get_domain_shift_dataloader(cfg, batch_size=batch_size)
+        else:
+            self.test_loader = get_test_dataloader(cfg, batch_size=batch_size)
 
         self.cur_step = cfg.DATA.SEQ_LEN - 2
         self.pred_end = {}

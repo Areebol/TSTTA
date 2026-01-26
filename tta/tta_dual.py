@@ -23,7 +23,8 @@ from device_manager import global_device
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        n_var = 1 if is_patchtst else cfg.DATA.N_VAR
+        # n_var = 1 if is_patchtst else cfg.DATA.N_VAR
+        n_var = cfg.MODEL.c_out if is_patchtst else cfg.DATA.N_VAR
         return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
     
     if not cfg.TTA.DUAL.CALI_MODULE:
@@ -40,7 +41,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     constructors = {
         'tafas-GCM': tafas_GCM,
         'petsa-GCM': petsa_GCM,
-        'coba-GCM': CoBA_GCM,
+        'CoBA_GCM': CoBA_GCM,
         'lowrank-coba-GCM': CoBA_low_rank_GCM,
         'coba-online-only': CoBA_online_only,
         'identity': IdentityAdapter,
@@ -51,7 +52,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
         'RoCoBA_FreqDomain_Norm': RoCoBA_FreqDomain_Norm,
     }
-    if model_type == 'coba-GCM':
+    if model_type == 'CoBA_GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
@@ -92,7 +93,7 @@ def build_loss_fn(cfg) -> nn.Module:
     elif loss_name == 'PETSA': 
         alpha = getattr(cfg.TTA.DUAL, 'PETSA_LOSS_ALPHA', 0.1)
         return PETSALoss(alpha=alpha)
-    elif loss_name == "COBA":
+    elif loss_name == "CoBA_Loss":
         return CoBA_Loss(lambda_ortho=0.01)
     elif loss_name == "LOWRANK-COBA":
         return LowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)

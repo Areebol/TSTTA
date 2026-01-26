@@ -176,9 +176,9 @@ class EVED(Dataset):
         
         # Collect all unique vehicle IDs involved
         all_vids = sorted(list(set(train_vids) | set(val_vids) | set(test_vids)))
-
+        # print('all_vids', all_vids, train_vids, test_vids)
         for vid in all_vids:
-            vdir = ev_root / vid
+            vdir = ev_root / str(vid)
             if not vdir.exists():
                 continue
             files = sorted(vdir.glob("*.csv"))
