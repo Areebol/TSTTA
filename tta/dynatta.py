@@ -16,6 +16,7 @@ from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
 import matplotlib.pyplot as plt
+from tta.utils import save_tta_results
 
 
 class DynaTTAAdapter(nn.Module):
@@ -273,6 +274,19 @@ class DynaTTAAdapter(nn.Module):
         self.mae_all = np.concatenate(self.mae_all)
         assert len(self.mse_all) == len(self.test_loader.dataset)
 
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+        tta_method = f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # tta_method = f'TAFAS'
+        save_tta_results(
+            tta_method=tta_method,
+            seed=self.cfg.SEED,
+            model_name=self.cfg.MODEL.NAME,
+            dataset_name=dataset_name,
+            pred_len=self.cfg.DATA.PRED_LEN,
+            mse_after_tta=self.mse_all.mean(),
+            mae_after_tta=self.mae_all.mean(),
+        )
+
         self._save_results_to_json()
         self.model.eval()
         # self.plot_lr_history()
@@ -354,33 +368,22 @@ class DynaTTAAdapter(nn.Module):
 
                     full_adapt_start = time.time()
                     self._adapt_full()
-                    self.time_stats['full_adaptation'] += time.time() - full_adapt_start
-                    self.time_counts['full_adaptation'] += 1
 
                     partial_adapt_start = time.time()
                     pred, gt = self._adapt_partial(window, period, bs, batch_idx)
-                    self.time_stats['partial_adaptation'] += time.time() - partial_adapt_start
-                    self.time_counts['partial_adaptation'] += 1
 
                     metrics_start = time.time()
                     z, dr, dp = self._collect_current_metrics(window)
                     device = next(self.model.parameters()).device
                     metrics = torch.tensor([z, dr, dp], device=device)
-                    self.time_stats['metrics_collection'] += time.time() - metrics_start
-                    self.time_counts['metrics_collection'] += 1
 
                     if self.cfg.TTA.TAFAS.ADJUST_PRED:
                         adjust_start = time.time()
                         pred, gt = self._adjust_prediction(pred, window, bs, period, metrics)
-                        self.time_stats['prediction_adjustment'] += time.time() - adjust_start
-                        self.time_counts['prediction_adjustment'] += 1
 
                     metric_comp_start = time.time()
                     mse = F.mse_loss(pred, gt, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
                     mae = F.l1_loss(pred, gt, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
-                    self.time_stats['metric_computation'] += time.time() - metric_comp_start
-                    self.time_counts['metric_computation'] += 1
-
                     self.mse_all.append(mse)
                     self.mae_all.append(mae)
 
@@ -393,6 +396,20 @@ class DynaTTAAdapter(nn.Module):
             self.switch_eval()
 
         self.time_stats['total_time'] = time.time() - total_start_time
+
+
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+        tta_method = f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # tta_method = f'TAFAS'
+        save_tta_results(
+            tta_method=tta_method,
+            seed=self.cfg.SEED,
+            model_name=self.cfg.MODEL.NAME,
+            dataset_name=dataset_name,
+            pred_len=self.cfg.DATA.PRED_LEN,
+            mse_after_tta=self.mse_all.mean(),
+            mae_after_tta=self.mae_all.mean(),
+        )
 
         if self.mse_all:
             self.mse_all = np.concatenate(self.mse_all)

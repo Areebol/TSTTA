@@ -13,6 +13,8 @@ import math
 from device_manager import global_device
 from tta.tta_dual_utils.query_net import *
 
+eved_enable = False
+
 class tafas_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, gating_init=0.01, var_wise=True, **args):
         super(tafas_GCM, self).__init__()
@@ -128,7 +130,7 @@ class Fre_GCM(nn.Module):
 class CoBA_GCM(nn.Module):
     def __init__(self, window_len, n_var=1, hidden_dim=64, 
                  gating_init=0.01, var_wise=True,
-                 n_bases=8, feature_dim=32, query_type='freq-base-CD'):
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI'):
         super(CoBA_GCM, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
@@ -137,7 +139,8 @@ class CoBA_GCM(nn.Module):
         self.feature_dim = feature_dim
         self.online_mode = False
         self.analyzer = CoBA_Analyzer(self)
-        self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
+        # self.codebook_keys = nn.Parameter(torch.randn(n_bases, feature_dim))
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         
         if var_wise:
             self.bases = nn.Parameter(torch.Tensor(n_bases, window_len, window_len, n_var))
@@ -202,11 +205,19 @@ class CoBA_GCM(nn.Module):
         """
         batch_size = x.size(0)
 
-        query = self._get_query(x)
+        # query = self._get_query(x)
+        # query = self.query_net(x).squeeze(1)
+        query = self.query_net(x)
         query_norm = F.normalize(query, p=2, dim=1)           # (B, D)
-        keys_norm = F.normalize(self.codebook_keys, p=2, dim=1) # (N, D)
-        similarity = torch.matmul(query_norm, keys_norm.T)
-        
+        # print(query.shape)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1) # (N, D)
+        # similarity = torch.matmul(query_norm, keys_norm.T)
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2),         # (B, N_vars, 1, D)
+            keys_norm.transpose(1, 2)       # (N_vars, D, N_bases)
+        ).squeeze(2)              
+
+        print(similarity.shape)
         coeffs = F.softmax(similarity, dim=-1) # (B, N)
         
         if self.var_wise:
@@ -1989,6 +2000,8 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
             self.query_net = QueryNet_Freq_Base_ChannelIndependence(window_len, n_var, feature_dim)
             # self.query_net = QueryNet_Freq_Base_ChannelIndependence(seq_len, n_var, feature_dim)
         # ... (保留其他 query_type 的判断) ...
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(window_len, n_var, feature_dim)
         else:
             # Default fallback
             print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
@@ -1997,9 +2010,14 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
 
         # --- 3. Online Mode Parameters ---
         self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.temp_params = nn.Parameter(gating_init * torch.ones(1))
         
         # 注意：因为现在是在归一化空间操作，这些参数的初始化变得更加安全有效
-        self.freq_len = self.freq_len + self.seq_len // 2 # take input as window_len + 96
+        # self.freq_len = self.freq_len + self.seq_len // 2 # take input as window_len + 96
+        if eved_enable:
+            self.freq_len = self.freq_len + window_len // 2 # take input as window_len + 96
+        else:
+            self.freq_len = self.freq_len + self.seq_len // 2 # take input as window_len + 96
         self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len, n_var))
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len, n_var))
@@ -2113,6 +2131,11 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         if self.online_mode:
             # 这里的 x_fft 是归一化的，所以 online_freq 参数只需要在 1e-5 附近微调
             # 梯度非常稳定，收敛快
+            
+            if eved_enable:
+                target_idx = [12, 13] 
+                x_enc   = x_enc[:, :, target_idx]
+
             adapter_ins = torch.cat([x_enc, x_base], dim=1)
             x_fft = torch.fft.rfft(adapter_ins, dim=1, norm='ortho')  # (B, F, V)
             delta_real_online = (
@@ -2153,5 +2176,5 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
             params.append(self.online_bias_i)
             params.append(self.tafas_gating)
         else:
-            params.append(self.tafas_gating)
+            params.append(self.temp_params)
         return params

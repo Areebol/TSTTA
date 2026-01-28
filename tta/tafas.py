@@ -363,6 +363,18 @@ class Adapter(nn.Module):
                 'n_adapt': self.n_adapt,
             })
         
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+        tta_method = f'TAFAS-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # tta_method = f'TAFAS'
+        save_tta_results(
+            tta_method=tta_method,
+            seed=self.cfg.SEED,
+            model_name=self.cfg.MODEL.NAME,
+            dataset_name=dataset_name,
+            pred_len=self.cfg.DATA.PRED_LEN,
+            mse_after_tta=self.mse_all.mean(),
+            mae_after_tta=self.mae_all.mean(),
+        )
         self.model.eval()
     
     def _calculate_period_and_batch_size(self, enc_window_first):

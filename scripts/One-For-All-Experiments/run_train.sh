@@ -1,15 +1,16 @@
 #!/bin/bash
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" )
+MODELS=("FreTS")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-DATASETS=("ETTm2")
-DATASETS=("eVED")
-PRED_LENS=(96 192 336 720)
-# PRED_LENS=(720)
+# DATASETS=("ETTm2")
+DATASETS=("exchange_rate")
+# PRED_LENS=(96 192 336 720)
+PRED_LENS=(720)
+LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
+# LRS=(5e-5 5e-6 1e-6)
 
-
-# NPUS=(3)          # 可用的 NPU ID
-NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
+NPUS=(7)          # 可用的 NPU ID
+# NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数
@@ -25,12 +26,13 @@ parallel --lb -j ${TOTAL_JOBS} '
     slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
     NPU_ID=${npu_array[$slot_idx]}
 
-    echo "Job slot {%}: Running on NPU ${NPU_ID} (MODEL={1}, DATASET={2}, PRED={3})"
-    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
-    export CUDA_VISIBLE_DEVICES=${NPU_ID}
-
     NORM_MODULE_ENABLE=False
     NORM_MODULE_NAME="RevIN"
+    LR={4}
+
+    echo "Job slot {%}: Running on NPU ${NPU_ID} (MODEL={1}, DATASET={2}, PRED={3}, LR={4})"
+    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
         DATA.NAME {2} \
@@ -38,12 +40,13 @@ parallel --lb -j ${TOTAL_JOBS} '
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
         TRAIN.ENABLE True \
-        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}/ \
+        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}_lr{4}/ \
+        SOLVER.BASE_LR ${LR} \
         NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
         NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TTA.ENABLE False \
-        TEST.ENABLE False
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}"
+        TEST.ENABLE True
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${LRS[@]}"
 
 
 # for NAME in "${MODELS[@]}"; do

@@ -1,5 +1,5 @@
-#!/bin/bash
-# NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+!/bin/bash
+NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NPUS=(7)
 NNPU=${#NPUS[@]}        # Number of NPUs
 
@@ -17,22 +17,24 @@ MODELS=("PatchTST")
 # PAIRS=("ETTm2:ETTm1")
 PAIRS=("eVED:eVED")
 
-
 # PRED_LENS=(96 192 336 720)
-BASE_NUMS=(10)
+BASE_NUMS=(32)
+# STEPS=(1 5 10)
 
-# LRS=(1e-1 5e-2 3e-2 1e-2)
-# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
-# LRS=(1e-1 1e-2 1e-3 1e-4)
-LRS=(1e-3)
+# OFFLINE_LRS=(2e-1 1e-1 1e-2 1e-3 1e-4)
+OFFLINE_LRS=(1e-1)
+# ONLINE_LRS=(0.1 0.05 0.01 0.005 0.001)
+ONLINE_LRS=(0.01)
 
 LAMBDA_ORTHO=(1e-2)
 QUERY_TYPES=("freq-base-CI")
 
 PRED_LENS=(24)
 LR=(1e-3)
-TRAIN_IDS="['455']"
-TEST_IDS="['10']"
+# TRAIN_IDS="['455']"
+# TEST_IDS="['10']"
+TRAIN_IDS="['10']"
+TEST_IDS="['455']"
 VAL_IDS=${TRAIN_IDS}
 # Clean TRAIN_IDS for directory naming: remove [, ], ', " and spaces
 TRAIN_IDS_CLEAN=$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")
@@ -65,17 +67,18 @@ parallel --lb -j ${TOTAL_JOBS} '
   TARGET=$(echo $PAIR | cut -d: -f2)
 
   PRED_LEN={3}
-  LR={4}
+  OFFLINE_LR={4}
   LAMBDA_ORTHO={5}
   N_BASES={6}
   QUERY_TYPE={7}
+  ONLINE_LR={8}
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_ids${TRAIN_IDS_CLEAN}/"
 
   RESULT_DIR="./results/output_tta/"
   mkdir -p "${RESULT_DIR}"
   
-  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | LR: ${LR}"
+  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | OFFLINE_LR: ${OFFLINE_LR} | ONLINE_LR: ${ONLINE_LR}"
 
   python main.py \
     SEED ${SEED} \
@@ -102,20 +105,23 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'Dual-tta' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR ${LR} \
+    TTA.SOLVER.BASE_LR ${OFFLINE_LR} \
     TTA.DUAL.PRETRAIN_EPOCHS 1 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME CoBA_GCM \
-    TTA.DUAL.LOSS_NAME CoBA_Loss \
+    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_Norm \
+    TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
-    TTA.DUAL.COBA_ONLINE_LR 1e-3 \
+    TTA.DUAL.COBA_ONLINE_LR ${ONLINE_LR} \
     TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.CALI_OUTPUT_ENABLE True \
-    TTA.DUAL.COBA_ONLINE_ENABLED False \
+    TTA.DUAL.COBA_ONLINE_ENABLED True \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}"
+' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${ONLINE_LRS[@]}"
+
+    # TTA.DUAL.CALI_NAME CoBA_GCM \
+    # TTA.DUAL.LOSS_NAME CoBA_Loss \

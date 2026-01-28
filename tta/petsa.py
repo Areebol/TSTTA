@@ -105,6 +105,11 @@ class Adapter(nn.Module):
 
         # EVED 检测
         ds = self.test_loader.dataset
+        self.is_eved_like = (
+            hasattr(ds, "get_num_test_csvs")
+            and hasattr(ds, "get_test_csv_window_range")
+            and hasattr(ds, "get_test_windows_for_csv")
+        )
     
     def count_parameters(self):
         print("------- PARAMETERS -------")
@@ -286,6 +291,120 @@ class Adapter(nn.Module):
         )
         self.model.eval()
     
+    @torch.enable_grad()
+    def adapt_tafas_eved(self):
+        """
+        对 EVED 数据集：按每个 CSV 独立进行 TTA 适配与评估
+        """
+        ds = self.test_loader.dataset
+        num_csv = ds.get_num_test_csvs()
+        from torch.utils.data import DataLoader, Subset
+
+        self.mse_all = []
+        self.mae_all = []
+        self.mse_per_var_all = []
+        self.n_adapt = 0
+
+        for csv_idx in range(num_csv):
+            # 为当前 csv 构建子 dataset / dataloader
+            indices = ds.get_test_windows_for_csv(csv_idx)
+            if not indices:
+                continue  # 该 csv 太短，无样本
+            sub_dataset = Subset(ds, indices)
+            # 这里使用整个子 csv 的窗口数作为 batch_size，保持与原 tafas 行为一致
+            sub_loader = DataLoader(sub_dataset, batch_size=len(sub_dataset), shuffle=False)
+
+            # 为当前 CSV 重置内部状态计数器与缓存
+            self.cur_step = self.cfg.DATA.SEQ_LEN - 2
+            self.pred_step_end_dict = {}
+            self.inputs_dict = {}
+
+            self.switch_model_to_eval()
+
+            for idx, inputs in enumerate(sub_loader):
+                # 这里不再以 csv 文件数打印进度，防止冲突
+                enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
+                batch_start = 0
+                batch_end = 0
+                batch_idx = 0
+                self.cur_step = self.cfg.DATA.SEQ_LEN - 2
+                is_last = False
+
+                while batch_end < len(enc_window_all):
+                    enc_window_first = enc_window_all[batch_start]
+                    if self.cfg.TTA.TAFAS.PAAS:
+                        period, batch_size = self._calculate_period_and_batch_size(enc_window_first)
+                    else:
+                        batch_size = self.cfg.TTA.TAFAS.BATCH_SIZE
+                        period = batch_size - 1
+                    batch_end = batch_start + batch_size
+
+                    if batch_end > len(enc_window_all):
+                        batch_end = len(enc_window_all)
+                        batch_size = batch_end - batch_start
+                        is_last = True
+
+                    self.cur_step += batch_size
+
+                    inputs_batch = (
+                        enc_window_all[batch_start:batch_end],
+                        enc_window_stamp_all[batch_start:batch_end],
+                        dec_window_all[batch_start:batch_end],
+                        dec_window_stamp_all[batch_start:batch_end],
+                    )
+
+                    self.pred_step_end_dict[batch_idx] = self.cur_step + self.cfg.DATA.PRED_LEN
+                    self.inputs_dict[batch_idx] = inputs_batch
+
+                    self._adapt_with_full_ground_truth_if_available()
+                    pred, ground_truth = self._adapt_with_partial_ground_truth(inputs_batch, period, batch_size, batch_idx)
+
+                    if self.cfg.TTA.TAFAS.ADJUST_PRED:
+                        pred, ground_truth = self._adjust_prediction(pred, inputs_batch, batch_size, period)
+
+                    mse = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+                    mae = F.l1_loss(pred, ground_truth, reduction='none').mean(dim=(-2, -1)).detach().cpu().numpy()
+                    mse_per_var = F.mse_loss(pred, ground_truth, reduction='none').mean(dim=-2).detach().cpu().numpy()
+
+                    self.mse_all.append(mse)
+                    self.mae_all.append(mae)
+                    self.mse_per_var_all.append(mse_per_var)
+
+                    batch_start = batch_end
+                    batch_idx += 1
+
+            # 当前 路径 完成后，重置模型/优化器，以防影响下一个 CSV
+            if self.cfg.TTA.RESET: self.reset()
+            self.switch_model_to_eval()
+
+        self.mse_all = np.concatenate(self.mse_all) if self.mse_all else np.array([])
+        self.mae_all = np.concatenate(self.mae_all) if self.mae_all else np.array([])
+        self.mse_per_var_all = np.concatenate(self.mse_per_var_all) if self.mse_per_var_all else np.array([])
+
+        if len(self.mse_all) > 0:
+            print('After TSF-TTA of TAFAS on EVED (per-CSV)')
+            print(f'Number of adaptations: {self.n_adapt}')
+            print(f'Test MSE: {self.mse_all.mean():.4f}, Test MAE: {self.mae_all.mean():.4f}')
+            print(f'Test MSE per channels: {self.mse_per_var_all.mean(axis=0)}')
+            print()
+        else:
+            print('No valid test windows for EVED dataset.')
+        
+        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"        
+        tta_method = f'PETSA-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # tta_method = 'PETSA'
+        save_tta_results(
+            tta_method=tta_method,
+            seed=self.cfg.SEED,
+            model_name=self.cfg.MODEL.NAME,
+            dataset_name=dataset_name,
+            pred_len=self.cfg.DATA.PRED_LEN,
+            mse_after_tta=self.mse_all.mean(),
+            mae_after_tta=self.mae_all.mean(),
+        )
+
+        self.model.eval()
+
     def _calculate_period_and_batch_size(self, enc_window_first):
         fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
         # amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
@@ -385,7 +504,11 @@ class Adapter(nn.Module):
         return pred, ground_truth
     
     def adapt(self):
-        self.adapt_petsa()
+        # 根据数据集类型选择不同的 TTA 策略
+        if getattr(self, "is_eved_like", False):
+            self.adapt_tafas_eved()
+        else:
+            self.adapt_tafas()
 
 
 def build_adapter(cfg, model, norm_module=None):
