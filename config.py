@@ -318,6 +318,12 @@ _C.MODEL.patch_len = 16
 _C.MODEL.stride = 8
 _C.MODEL.num_class = 1
 
+# Informer specific defaults
+# _C.MODEL.attention = 'full'  # full, prob, etc.
+_C.MODEL.distil = True
+_C.MODEL.output_attention = False
+
+
 _C.NORM_MODULE = CN()
 _C.NORM_MODULE.ENABLE = False  # NST
 _C.NORM_MODULE.NAME = 'RevIN'  # SAN, RevIN, DishTS

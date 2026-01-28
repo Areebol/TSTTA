@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 
 from models import Autoformer, iTransformer, DLinear, PatchTST, FreTS, MICN, Pyraformer, TimesNet, OLS, Koopa, KNF, LSTM
+from models import Informer, Reformer, Autoformer, ETSformer, FEDformer
 from device_manager import global_device
 
 
