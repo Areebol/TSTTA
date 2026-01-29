@@ -20,9 +20,10 @@ MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
-MODELS=("Informer")
-DATASETS=("sVED")
-PRED_LENS=(24)
+MODELS=("PatchTSTPCD" "LSTM")
+# DATASETS=("sVED")
+DATASETS=("eVED")
+PRED_LENS=(24 48 96)
 
 # training hyperparams (tune as needed)
 
@@ -30,7 +31,7 @@ LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
 # LRS=(1e-2)
 
 # NPUS=(7)          # 可用的 NPU ID
-NPUS=(2 3 4 5 6 7)  # 可用的 NPU ID
+NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数

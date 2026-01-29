@@ -16,7 +16,7 @@ patch_len=16
 stride=8
 # MODEL="LSTM"
 # MODEL="PatchTST"
-MODEL="LSTM"
+MODEL="PatchTSTPCD"
 
 # training hyperparams (tune as needed)
 EPOCHS=30
