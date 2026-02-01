@@ -34,6 +34,29 @@ class QueryNet_Time(nn.Module):
         return self.net(x_flat)
 
 
+class QueryNet_TimeCI(nn.Module):
+    """
+    方案 A: Variable-Wise Linear Projection (不合并变量)
+    输入: (B, L, V)
+    输出: (B, V, D) -> 每个变量拥有独立的 Query 向量
+    """
+    def __init__(self, window_len, n_var, feature_dim=16):
+        super().__init__()
+        # 这一层权重在所有变量(V)之间共享
+        self.encoder = nn.Sequential(
+            nn.Linear(window_len, feature_dim * 2),
+            nn.GELU(),
+            nn.Linear(feature_dim * 2, feature_dim)
+        )
+
+    def forward(self, x):
+        # x: (Batch, Window_len, N_var)
+        # 维度置换: (B, L, V) -> (B, V, L)
+        x_var = x.permute(0, 2, 1)
+        # (B, V, L) -> (B, V, D)
+        query = self.encoder(x_var)
+        return query
+
 # ==========================================
 # 2. Baseline B: 基础频域 (Freq-Base, 原版)
 # ==========================================
