@@ -156,6 +156,7 @@ class Adapter(nn.Module):
             parts.append("coba-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
+            parts.append(f'ortho-{self.cfg.TTA.PKA.LAMBDA_ORTHO}')
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_GCM' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
             parts.append("coba-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
