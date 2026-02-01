@@ -59,6 +59,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'query_type': cfg.TTA.PKA.QUERY_TYPE,
             'seq_len': seq_len,
         }
+        params.update(coba_params)
     elif model_type in ['lowrank-coba-GCM']:
         coba_params = {
             'n_bases': cfg.TTA.PKA.GCM_N_BASES,
@@ -151,11 +152,12 @@ class Adapter(nn.Module):
 
 
         parts = []
-        if self.cfg.TTA.PKA.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-            parts.append("ro-coba-feq-norm-offline")
+        if self.cfg.TTA.PKA.CALI_NAME == 'PKA_GCM' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("coba-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.PKA.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-            parts.append("ro-coba-feq-norm-online")
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
+        elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_GCM' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("coba-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
         else:

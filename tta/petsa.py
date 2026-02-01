@@ -292,7 +292,7 @@ class Adapter(nn.Module):
         self.model.eval()
     
     @torch.enable_grad()
-    def adapt_tafas_eved(self):
+    def adapt_petsa_eved(self):
         """
         对 EVED 数据集：按每个 CSV 独立进行 TTA 适配与评估
         """
@@ -332,7 +332,7 @@ class Adapter(nn.Module):
 
                 while batch_end < len(enc_window_all):
                     enc_window_first = enc_window_all[batch_start]
-                    if self.cfg.TTA.TAFAS.PAAS:
+                    if self.cfg.TTA.PETSA.PAAS:
                         period, batch_size = self._calculate_period_and_batch_size(enc_window_first)
                     else:
                         batch_size = self.cfg.TTA.TAFAS.BATCH_SIZE
@@ -506,9 +506,9 @@ class Adapter(nn.Module):
     def adapt(self):
         # 根据数据集类型选择不同的 TTA 策略
         if getattr(self, "is_eved_like", False):
-            self.adapt_tafas_eved()
+            self.adapt_petsa_eved()
         else:
-            self.adapt_tafas()
+            self.adapt_petsa()
 
 
 def build_adapter(cfg, model, norm_module=None):
