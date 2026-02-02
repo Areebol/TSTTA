@@ -252,19 +252,24 @@ class Adapter(nn.Module):
         while self.cur_step >= self.pred_step_end_dict[min(self.pred_step_end_dict.keys())]:
             batch_idx_available = min(self.pred_step_end_dict.keys())
             inputs_history = self.inputs_dict.pop(batch_idx_available)
-            for _ in range(self.cfg.TTA.PKA.STEPS):
+
+            with torch.no_grad():
                 self.n_adapt += 1
-                
-                self._switch_model_to_train()
 
                 if self.cali.input_calibration is not None:
                     inputs_history = self.cali.input_calibration(inputs_history)
+                
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, PKA_GCM):
                         enc_history = prepare_inputs(inputs_history)[0]
                         pred, z_t = self.cali.output_calibration(pred, enc_history)
+
+                        if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+                            # update the memory bank with the new observations
+                            self.cali.out_cali.update_bias(ground_truth, pred, z_t)
+                            self.cali.out_cali.update_dynamic_memory()
                     else:
                         pred = self.cali.output_calibration(pred)
                     
@@ -272,12 +277,6 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.static_keys)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
-
-                self.optimizer.zero_grad()
-                if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-                    loss.backward()
-                self.optimizer.step()
-                self._switch_model_to_eval()
             
             self.pred_step_end_dict.pop(batch_idx_available)
 
