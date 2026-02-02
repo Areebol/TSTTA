@@ -101,6 +101,50 @@ class OrthoLoss(nn.Module):
         # 这意味着：对自己相似度为1，对别人相似度为0 (正交)
         return F.mse_loss(gram_matrix, identity)
 
+
+class OrthoCILoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+
+    def forward(self, keys):
+        """
+        计算 Channel-Independent 正交损失
+        
+        Args:
+            keys: shape (n_var, n_static, feature_dim)
+                  我们希望对于每一个 var，其内部的 (n_static, feature_dim) 矩阵是正交的。
+        """
+        # 1. 获取维度信息
+        if keys.ndim == 2:
+            # 兼容旧版本 (N, D) 的情况，手动增加 batch 维度 -> (1, N, D)
+            keys = keys.unsqueeze(0)
+            
+        n_var, n_static, feature_dim = keys.shape
+        
+        # 2. Normalize: 沿着特征维度 (dim=-1) 做归一化
+        # Input: (V, N, D) -> Output: (V, N, D)
+        keys_norm = F.normalize(keys, p=2, dim=-1)
+        
+        # 3. Batch Gram Matrix Calculation
+        # 利用 matmul 的广播机制，把 dim 0 (n_var) 当作 Batch 处理
+        # (V, N, D) @ (V, D, N) -> (V, N, N)
+        # 结果 gram_matrix[v] 就是第 v 个变量的 Gram 矩阵
+        gram_matrix = torch.matmul(keys_norm, keys_norm.transpose(-2, -1))
+        
+        # 4. Target: Identity Matrix
+        # 创建 (N, N) 单位阵
+        identity = torch.eye(n_static, device=keys.device)
+        # 扩展到 (V, N, N) 以匹配 gram_matrix
+        identity = identity.unsqueeze(0).expand(n_var, -1, -1)
+        
+        # 5. MSE: 计算 Gram 矩阵与单位阵的差距
+        # F.mse_loss 会对所有元素求平均，因此会自动平均所有通道的 Loss
+        loss = F.mse_loss(gram_matrix, identity)
+        
+        return loss
+
+
 # class LowRankOrthoLoss(nn.Module):
 #     def __init__(self):
 #         super().__init__()
@@ -216,7 +260,8 @@ class CoBA_Loss(nn.Module):
         super().__init__()
         # self.task_loss_fn = PETSALoss(alpha=0.1)
         self.task_loss_fn = StandardMSELoss()
-        self.ortho_loss_fn = OrthoLoss()
+        # self.ortho_loss_fn = OrthoLoss()
+        self.ortho_loss_fn = OrthoCILoss()
         
         self.lambda_ortho = lambda_ortho
         self.lambda_sparse = lambda_sparse
