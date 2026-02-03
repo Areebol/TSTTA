@@ -20,18 +20,20 @@ MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
-MODELS=("PatchTSTPCD" "LSTM")
-DATASETS=("sVED")
-# DATASETS=("eVED")
-PRED_LENS=(24 48 96)
+MODELS=("LSTM" "PatchTSTPCD")
+MODELS=("PatchTSTPCD")
+# DATASETS=("sVED")
+DATASETS=("eVED")
+# PRED_LENS=(24 48 96)
+PRED_LENS=(192)
 
 # training hyperparams (tune as needed)
 
-LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
-# LRS=(1e-2)
+LRS=(1e-2 1e-3 1e-4 1e-5)
+# LRS=(1e-6)
 
-# NPUS=(7)          # 可用的 NPU ID
-NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
+NPUS=(7)          # 可用的 NPU ID
+# NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数
@@ -57,10 +59,10 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   SEQ_LEN={3}
   EPOCHS=30
-  BATCH_SIZE=256
-  patch_len=8
-  stride=4
-  LABEL_LEN=12
+  BATCH_SIZE=128
+  patch_len=16
+  stride=8
+  LABEL_LEN=48
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_${LR}"
   mkdir -p "${CHECKPOINT_DIR}"

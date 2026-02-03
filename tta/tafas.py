@@ -270,7 +270,7 @@ class Adapter(nn.Module):
         self.mae_all = []
         self.mse_per_var_all = []
         self.n_adapt = 0
-
+        print(f"CSV files to adapt and evaluate on EVED dataset using {num_csv} files.")
         for csv_idx in range(num_csv):
             # 为当前 csv 构建子 dataset / dataloader
             indices = ds.get_test_windows_for_csv(csv_idx)
@@ -448,6 +448,7 @@ class Adapter(nn.Module):
         return pred, ground_truth
     
     def adapt(self):
+        print("[INFO] Starting adaptation...", self.is_eved_like)
         # 根据数据集类型选择不同的 TTA 策略
         if getattr(self, "is_eved_like", False):
             self.adapt_tafas_eved()
@@ -481,6 +482,37 @@ class GCM(nn.Module):
         return x
 
 
+class GCM_Fusion(nn.Module):
+    def __init__(self, window_len, n_var=1, gating_init=0.01):
+        super(GCM_Fusion, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        
+        # 核心变动：权重现在不仅作用于时间维度 (i->o)，还作用于通道维度 (v_in -> v_out)
+        # 形状为 (window_len, window_len, n_var, n_var) 可能会导致参数量爆炸
+        # 推荐做法：使用类似深度可分离卷积的思想，先做时间混合，再做通道混合，或者直接全连接
+        
+        # 这里采用标准通道融合方案：Linear Projection (针对所有变量的联合特征)
+        self.mixing_layer = nn.Linear(window_len * n_var, window_len * n_var)
+        
+        # 门控机制保留，但通常改为标量或统一向量
+        self.gating = nn.Parameter(gating_init * torch.ones(1))
+        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+
+    def forward(self, x):
+        # x 形状: (batch, window_len, n_var)
+        b, l, v = x.shape
+        
+        # 将 window 和 var 展平进行融合处理
+        residual = x.reshape(b, -1) 
+        out = self.mixing_layer(residual)
+        
+        # 恢复形状并应用门控
+        out = out.reshape(b, l, v) + self.bias
+        x = x + torch.tanh(self.gating) * out
+        return x
+
+
 class Calibration(nn.Module):
     def __init__(self, cfg):
         super(Calibration, self).__init__()
@@ -491,18 +523,24 @@ class Calibration(nn.Module):
         self.hidden_dim = cfg.TTA.TAFAS.HIDDEN_DIM
         self.gating_init = cfg.TTA.TAFAS.GATING_INIT
         self.var_wise = cfg.TTA.TAFAS.GCM_VAR_WISE
-        if cfg.MODEL.NAME == 'PatchTST':
+        if cfg.MODEL.NAME in ['PatchTST']:
             self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
             self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
+        elif cfg.MODEL.NAME in ['PatchTSTPCD']:
+            self.in_cali = None
+            # self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
+            self.out_cali = GCM(self.pred_len, cfg.MODEL.c_out, self.hidden_dim, self.gating_init, self.var_wise)
         else:
             self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
             self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
         
     def input_calibration(self, inputs):
         enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
-        enc_window = self.in_cali(enc_window)
+        if self.in_cali is not None:
+            enc_window = self.in_cali(enc_window)
         return enc_window, enc_window_stamp, dec_window, dec_window_stamp
 
     def output_calibration(self, outputs):
-        return self.out_cali(outputs)
-        # return outputs
+        if self.out_cali is not None:
+            outputs = self.out_cali(outputs)
+        return outputs

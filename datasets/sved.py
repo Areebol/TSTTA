@@ -17,7 +17,7 @@ class sVED(Dataset):
     Matched Longitude[deg], Speed Limit[km/h], Intersection, Bus Stops, Focus Points) is
     included in decoder inputs for the future horizon.
     """
-    VEHICLE_IDS = ("10", "455", "541")
+    VEHICLE_IDS = ("10", "455")
     DEFAULT_EV_ROOT = Path("./data/sved")
 
     FOCUS_POINTS_MAP = {
@@ -494,3 +494,8 @@ class sVED(Dataset):
         start_idx, end_idx = self.get_test_csv_window_range(csv_idx)
         if start_idx >= end_idx:
             return None  # 没有有效 window
+
+        # 假设 ForecastingDataset.__getitem__(idx) 是基于全局 test window 索引
+        indices = list(range(start_idx, end_idx))
+        # 外部可以创建 Subset(self, indices) 和 DataLoader；此处为了不依赖 torch，这里只返回下标列表
+        return indices
