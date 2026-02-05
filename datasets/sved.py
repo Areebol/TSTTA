@@ -40,28 +40,24 @@ class sVED(Dataset):
     }
 
     # 12 covariates + 2 target = 14 variables
+    # 定义列名列表
     FEATURE_COLUMNS = [
-        "OAT[DegC]",
-        "Air Conditioning Power[Watts]",
-        "Heater Power[Watts]",
-        "Elevation Smoothed[m]",
-        "Gradient Smoothed",
-        # "Gradient Smoothed_2",
-        "Speed Limit[km/h]",
-        "Intersection",
-        "Bus Stops",
-        "Focus Points",
-        "HV Battery SOC[%]",
-        "HV Battery Current[A]",
-        "HV Battery Voltage[V]",
-        "Vehicle Speed[km/h]",
-        "Energy_Consumption",
+        "OAT[DegC]",                    # 0: Static
+        "Air Conditioning Power[Watts]",# 1: Static
+        "Heater Power[Watts]",          # 2: Static
+        "Elevation Smoothed[m]",        # 3: Static
+        "Gradient Smoothed",            # 4: Dynamic
+        "Speed Limit[km/h]",            # 5: Static
+        "Intersection",                 # 6: Static
+        "Bus Stops",                    # 7: Static
+        "Focus Points",                 # 8: Static
+        "HV Battery SOC[%]",            # 9: Static
+        "HV Battery Current[A]",        # 10: Dynamic
+        "HV Battery Voltage[V]",        # 11: Dynamic
+        "Vehicle Speed[km/h]",          # 12: Dynamic (Target)
+        "Energy_Consumption",           # 13: Dynamic (Target)
     ]
 
-    # FEATURE_COLUMNS = [
-    #     "Vehicle Speed[km/h]",
-    #     "Energy_Consumption",
-    # ]
 
     def __init__(
         self,

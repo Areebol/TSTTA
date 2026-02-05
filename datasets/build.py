@@ -245,12 +245,10 @@ def update_cfg_from_dataset(cfg: CN, dataset_name: str):
         # cfg.MODEL.c_out = n_var
     
     elif dataset_name == 'oVED':
-        n_var = 14 + 6
+        n_var = 13 + 16
         cfg.DATA.N_VAR = n_var
         cfg.DATA.FEATURES = 'M'  # single target
-        # vehicle speed index is 6,
-        # Energy_Consumption index is 7
-        cfg.DATA.TARGET_START_IDX = 12
+        cfg.DATA.TARGET_START_IDX = 27  # vehicle speed index is 27, Energy_Consumption index is 28
         # cfg.DATA.TARGET_START_IDX = 0
         cfg.DATA.PERIOD_LEN = 60
         cfg.DATA.TRAIN_RATIO = 0.7

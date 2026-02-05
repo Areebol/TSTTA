@@ -20,8 +20,8 @@ MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
-MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerPCD")
-MODELS=("TimeXerPCDWoNorm")
+MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM")
+MODELS=("TimeXerRoadM")
 # DATASETS=("sVED")
 # DATASETS=("eVED")
 DATASETS=("oVED")
@@ -34,11 +34,11 @@ PRED_LENS=(24)
 LRS=(1e-2 1e-3 1e-4 1e-5)
 # LRS=(1e-4)
 
-NPUS=(0 1 2 3)          # 可用的 NPU ID
+NPUS=(7)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=2               # 每个 NPU 并行任务数
+PER_NPU=1               # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
