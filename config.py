@@ -352,6 +352,10 @@ _C.MODEL.num_class = 1
 _C.MODEL.distil = True
 _C.MODEL.output_attention = False
 
+# TimeXer specific defaults
+_C.MODEL.use_norm = True
+_C.MODEL.features = 'M'  # S, M, MS
+
 
 _C.NORM_MODULE = CN()
 _C.NORM_MODULE.ENABLE = False  # NST
