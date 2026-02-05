@@ -12,35 +12,39 @@ class ChannelMixingHead(nn.Module):
         self.n_vars = n_vars
         self.target_window = target_window
         
-        # 1. 通道融合层：仿 LSTM 的核心一步
-        # 将 [Batch, N_vars, NF] 融合为 [Batch, 1, NF] 或者减少 N_vars
-        # 这里我们直接学习所有变量间的交互权值
-        self.channel_fusion = nn.Linear(n_vars, 1) # 融合为单通道特征流，或者设为 middle_dim
+        # 1. 通道融合层
+        # 将 [Batch, N_vars, NF] 融合为 [Batch, 1, NF]
+        # 这一步强制模型学习所有变量(N_vars)在特征空间(NF)的组合权重
+        self.channel_fusion = nn.Linear(n_vars, 1)
         
         # 2. 展平与投影
+        # 输入维度: nf (因为 channel 被融合成了 1)
+        # 输出维度: n_vars * target_window (我们需要恢复出所有变量的预测值)
         self.flatten = nn.Flatten(start_dim=-2)
         self.linear_pred = nn.Linear(nf, n_vars * target_window)
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):
-        # x shape: [Batch, N_vars, D_model, Patch_num+1]
-        # 合并后两个维度为 nf: [B, N_vars, NF]
+        # x input shape: [Batch, N_vars, D_model, Patch_num+1]
+        
         B, V, D, P = x.shape
+        # 1. 展平 Patch 维度 -> [Batch, N_vars, NF]
         x = x.reshape(B, V, -1) 
         
-        # --- 仿 LSTM 的关键动作 ---
-        # 交换维度变为 [B, NF, N_vars]，在变量维度做融合
+        # 2. 通道融合 (仿 LSTM 隐状态更新)
+        # Transpose -> [Batch, NF, N_vars] 以便 Linear 对 N_vars 操作
         x = x.transpose(1, 2)
-        x = self.channel_fusion(x).squeeze(-1) # Shape: [B, NF]
+        x = self.channel_fusion(x).squeeze(-1) # -> [Batch, NF]
         
-        # 映射到预测空间
-        x = self.linear_pred(x) # Shape: [B, N_vars * target_window]
+        # 3. 映射到预测输出
+        x = self.linear_pred(x) # -> [Batch, N_vars * target_window]
         x = self.dropout(x)
         
-        # 重塑回 [B, Pred_Len, N_vars]
-        x = x.reshape(B, self.target_window, self.n_vars)
+        # 4. 重塑回 [Batch, N_vars, Pred_Len]
+        # 注意：这里必须是 (B, N, T)，因为 forecast 函数随后会做 permute(0, 2, 1)
+        x = x.reshape(B, self.n_vars, self.target_window)
+        
         return x
-
 
 
 # --- 1. 新增：通道融合输出头 (保持不变) ---
