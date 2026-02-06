@@ -24,7 +24,7 @@ class RoadConditioning(nn.Module):
         x_emb = self.mlp(x)
         return x_emb
 
-# --- [新增] 门控融合模块 ---
+# --- [保持] 门控融合模块 ---
 class GatedRoadInjection(nn.Module):
     def __init__(self, d_model, dropout=0.1):
         super().__init__()
@@ -44,7 +44,6 @@ class GatedRoadInjection(nn.Module):
         x_road:    [Batch, Patch_Num, D_model]
         """
         # A. 计算门控系数 (Gate)
-        # 拼接两者，让模型根据当前车辆状态和路况共同决定门的开启程度
         combined = torch.cat([x_dynamic, x_road], dim=-1)
         gate = self.gate_net(combined)
         
@@ -53,7 +52,6 @@ class GatedRoadInjection(nn.Module):
         road_feat = self.dropout(road_feat)
         
         # C. 加权注入 (Residual Connection)
-        # 只有在 gate 值高的地方，道路信息才会被显著加入
         out = x_dynamic + gate * road_feat
         
         return out
@@ -92,7 +90,11 @@ class EnEmbedding(nn.Module):
 
     def forward(self, x):
         n_vars = x.shape[1]
+        # 注意：这里假设 x 包含了所有变量，glb_token 维度需要对应
         glb = self.glb_token.repeat((x.shape[0], 1, 1, 1))
+        # 如果输入的 vars 数量与 glb_token 不一致（例如推理时切片），需要做相应处理
+        # 简单起见这里假设维度匹配
+        
         x = x.unfold(dimension=-1, size=self.patch_len, step=self.patch_len)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         x = self.value_embedding(x) + self.position_embedding(x)
@@ -161,8 +163,6 @@ class Model(nn.Module):
         
         # --- 变量拆分 ---
         assert configs.enc_in >= 20, "Encoder input dimensions must be >= 20"
-        # exclude = {4, 10, 11, 12, 13, 15}
-        # default_road_ids = [i for i in range(20) if i not in exclude]
         exclude = {24, 25, 26, 27, 28}  # for oVED datasets
         default_road_ids = [i for i in range(configs.enc_in) if i not in exclude]
         
@@ -180,16 +180,17 @@ class Model(nn.Module):
         self.n_dynamic = len(self.dynamic_ids)
         self.n_road = len(self.road_ids)
 
-        # 1. 动态变量 Embedding
-        self.en_embedding = EnEmbedding(self.n_dynamic, configs.d_model, self.patch_len, configs.dropout)
+        # 1. 统一 Embedding：现在对所有 variables (enc_in) 进行 Embed
+        # 输入维度是 n_vars (enc_in)，不再是 n_dynamic
+        self.en_embedding = EnEmbedding(self.n_vars, configs.d_model, self.patch_len, configs.dropout)
         
-        # 2. 道路变量处理
-        # Path A: MLP 提取
+        # 2. 道路变量 Context 提取 (用于 Gate)
         self.road_mlp_embedding = RoadConditioning(self.n_road, configs.d_model, self.patch_num)
-        # Path B: Cross Attention 输入
+        
+        # 3. Cross Attention Embedding (Keys/Values)
         self.ex_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq, configs.dropout)
 
-        # --- [修改] 使用 Gate Fusion 替代简单的 Linear ---
+        # --- 使用 Gate Fusion ---
         self.road_gate_fusion = GatedRoadInjection(configs.d_model, dropout=configs.dropout)
 
         self.encoder = Encoder(
@@ -205,7 +206,9 @@ class Model(nn.Module):
         
         self.head_nf = configs.d_model * (self.patch_num + 1)
         
-        self.head = ChannelMixingHead(in_vars=self.n_dynamic, out_vars=self.n_vars, 
+        # --- [修改] Head 输入维度改为 n_vars ---
+        # 因为 Encoder 现在输出所有变量的 Embedding
+        self.head = ChannelMixingHead(in_vars=self.n_vars, out_vars=self.n_vars, 
                                       nf=self.head_nf, target_window=configs.pred_len, 
                                       head_dropout=configs.dropout)
 
@@ -221,36 +224,60 @@ class Model(nn.Module):
             means, stdev = self._get_statistics(x_enc)
             x_enc = (x_enc - means) / stdev
 
-        # 1. 拆分数据
-        x_dynamic = torch.index_select(x_enc, 2, self.dynamic_ids_tensor)
-        x_road = torch.index_select(x_enc, 2, self.road_ids_tensor)
-
-        # 2. 动态特征 Embedding
-        # shape: [Batch * N_dyn, Patch_Num + 1, D_model]
-        enc_out_dynamic, n_vars_dyn = self.en_embedding(x_dynamic.permute(0, 2, 1))
+        # --- 1. Embedding 所有变量 ---
+        # x_enc: [Batch, Seq_Len, N_vars]
+        # enc_out_all: [Batch * N_vars, Patch_Num + 1, D_model]
+        enc_out_all, _ = self.en_embedding(x_enc.permute(0, 2, 1))
         
-        # 3. 道路特征处理 (Path A) - 门控注入
+        # 为了操作方便，先 reshape 回 [Batch, N_vars, P+1, D]
+        B = x_enc.shape[0]
+        enc_out_all = enc_out_all.reshape(B, self.n_vars, -1, enc_out_all.shape[-1])
+
+        # --- 2. 拆分 Dynamic 和 Road Embeddings ---
+        # 这里 dim=1 是变量维度，是正确的
+        enc_out_dynamic = torch.index_select(enc_out_all, 1, self.dynamic_ids_tensor)
+        enc_out_road = torch.index_select(enc_out_all, 1, self.road_ids_tensor)
+
+        # 展平 Dynamic 以适配 Gate 模块: [Batch * N_dyn, P+1, D]
+        enc_out_dynamic_flat = enc_out_dynamic.reshape(-1, enc_out_dynamic.shape[2], enc_out_dynamic.shape[3])
+
+        # --- 3. 计算全局道路 Context (Road Conditioning) ---
+        # [修复点] x_enc 是 [Batch, Seq_Len, N_vars]，选变量应该用 dim=2
+        # 原错误代码: x_road = torch.index_select(x_enc, 1, self.road_ids_tensor)
+        x_road = torch.index_select(x_enc, 2, self.road_ids_tensor) 
+        
         road_condition = self.road_mlp_embedding(x_road)
         road_glb = road_condition[:, -1:, :]
         road_condition = torch.cat([road_condition, road_glb], dim=1) # [B, P+1, D]
         
-        # 扩展 Batch 维度以匹配: [B, P, D] -> [B * N_dyn, P, D]
-        road_condition_expanded = road_condition.unsqueeze(1).repeat(1, n_vars_dyn, 1, 1).reshape(-1, road_condition.shape[1], road_condition.shape[2])
+        # 扩展 Context 以匹配 Dynamic 变量数量: [B, P+1, D] -> [B * N_dyn, P+1, D]
+        road_condition_expanded = road_condition.unsqueeze(1).repeat(1, self.n_dynamic, 1, 1)
+        road_condition_expanded = road_condition_expanded.reshape(-1, road_condition.shape[1], road_condition.shape[2])
+
+        # --- 4. 融合 (Gate Injection) ---
+        # enc_input (Dynamic Fused): [Batch * N_dyn, P+1, D]
+        enc_input_dynamic_fused = self.road_gate_fusion(enc_out_dynamic_flat, road_condition_expanded)
         
-        # --- [修改] 调用 Gate Fusion ---
-        # 替代了之前的 concat + linear
-        enc_input = self.road_gate_fusion(enc_out_dynamic, road_condition_expanded)
+        # 还原形状 [Batch, N_dyn, P+1, D]
+        enc_input_dynamic_fused = enc_input_dynamic_fused.reshape(B, self.n_dynamic, -1, enc_input_dynamic_fused.shape[-1])
 
-        # 4. 道路特征处理 (Path B) - Cross Attention Key/Value
+        # --- 5. 拼接输入到 Encoder ---
+        # 拼接: [Batch, N_dyn, ...] + [Batch, N_road, ...] -> [Batch, N_vars, ...]
+        enc_input = torch.cat([enc_input_dynamic_fused, enc_out_road], dim=1)
+        
+        # 再次展平给 Encoder: [Batch * N_vars, P+1, D]
+        enc_input_flat = enc_input.reshape(-1, enc_input.shape[2], enc_input.shape[3])
+
+        # --- 6. Cross Attention Embedding ---
         ex_embed = self.ex_embedding(x_road, x_mark_enc) # [B, N_road, D]
-        # 对齐 Batch 维度: [B, ...] -> [B*N_dyn, ...]
-        ex_embed = ex_embed.repeat_interleave(n_vars_dyn, dim=0)
+        # 对齐 Batch 维度: [B, ...] -> [B * N_vars, ...]
+        ex_embed = ex_embed.repeat_interleave(self.n_vars, dim=0)
 
-        # 5. Encoder
-        enc_out = self.encoder(enc_input, cross=ex_embed)
+        # --- 7. Encoder ---
+        enc_out = self.encoder(enc_input_flat, cross=ex_embed)
 
-        # 6. Head & Output
-        enc_out = torch.reshape(enc_out, (-1, n_vars_dyn, enc_out.shape[-2], enc_out.shape[-1]))
+        # --- 8. Head & Output ---
+        enc_out = torch.reshape(enc_out, (B, self.n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         enc_out = enc_out.permute(0, 1, 3, 2)
         
         dec_out = self.head(enc_out)

@@ -21,17 +21,17 @@ MODEL="LSTM"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
 MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM" "TimeXerRoadM")
-MODELS=("TimeXerRoadM")
-DATASETS=("sVED")
-# DATASETS=("eVED")
+MODELS=("LSTM")
+# DATASETS=("sVED")
+DATASETS=("eVED")
 # PRED_LENS=(24 48 96)
 # PRED_LENS=(192)
 PRED_LENS=(24)
 
 # training hyperparams (tune as needed)
 
-LRS=(1e-2 1e-3 1e-4 1e-5)
-# LRS=(1e-1 1e-2 1e-3 1e-4)
+# LRS=(1e-2 1e-3 1e-4 1e-5)
+LRS=(1e-1 1e-2 1e-3 1e-4)
 
 NPUS=(4 5 6 7)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
@@ -64,6 +64,7 @@ parallel --lb -j ${TOTAL_JOBS} '
   patch_len=4
   stride=4
   LABEL_LEN=12
+  e_layers=1
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_${LR}"
   mkdir -p "${CHECKPOINT_DIR}"
@@ -85,6 +86,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     MODEL.seq_len ${SEQ_LEN} \
     MODEL.patch_len ${patch_len} \
     MODEL.stride ${stride} \
+    MODEL.e_layers ${e_layers} \
     TRAIN.ENABLE True \
     SOLVER.MAX_EPOCH ${EPOCHS} \
     TRAIN.BATCH_SIZE ${BATCH_SIZE} \

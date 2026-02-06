@@ -5,12 +5,14 @@
 ############################################
 # MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
-MODELS=("PatchTSTPCD")
-DATASETS=("eVED")
+# MODELS=("PatchTSTPCD")
+MODELS=("LSTM")
+# DATASETS=("eVED")
+DATASETS=("oeVED")
 # PRED_LENS=(96 192 336 720)
 # PRED_LENS=(192)
 PRED_LENS=(24)
-BASE_LRS=(1e-4)
+BASE_LRS=(1e-3)
 TTA_LRS=(1e-2 1e-3 1e-4 1e-5)
 # TTA_LRS=(1e-3)
 
@@ -25,7 +27,7 @@ TTA_LRS=(1e-2 1e-3 1e-4 1e-5)
 # export VAL_IDS
 # export TRAIN_IDS_CLEAN
 
-NPUS=(4 5 6 7)          # 可用的 NPU ID
+NPUS=(0 1 2 3)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 

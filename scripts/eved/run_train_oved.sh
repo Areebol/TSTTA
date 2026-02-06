@@ -20,11 +20,12 @@ MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
-MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM")
+MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM" "TimeXerRoadM" "TimeXerRoadMMh")
 MODELS=("TimeXerRoadM")
 # DATASETS=("sVED")
 # DATASETS=("eVED")
-DATASETS=("oVED")
+# DATASETS=("oVED")
+DATASETS=("oeVED")
 # PRED_LENS=(24 48 96)
 # PRED_LENS=(192)
 PRED_LENS=(24)
@@ -32,9 +33,9 @@ PRED_LENS=(24)
 # training hyperparams (tune as needed)
 
 LRS=(1e-2 1e-3 1e-4 1e-5)
-# LRS=(1e-4)
+# LRS=(1e-1 1e-2 1e-3 1e-4)
 
-NPUS=(7)          # 可用的 NPU ID
+NPUS=(4 5 6 7)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
@@ -86,6 +87,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     MODEL.seq_len ${SEQ_LEN} \
     MODEL.patch_len ${patch_len} \
     MODEL.stride ${stride} \
+    MODEL.use_norm False \
     TRAIN.ENABLE True \
     SOLVER.MAX_EPOCH ${EPOCHS} \
     TRAIN.BATCH_SIZE ${BATCH_SIZE} \

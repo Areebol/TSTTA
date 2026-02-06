@@ -27,6 +27,7 @@ from .forecasting import (
 from .eved import EVED
 from .sved import sVED
 from .oved import oVED
+from .oeved import oeVED
 
 # ============== build dataset ==============
 def build_dataset(cfg, split):
@@ -91,6 +92,14 @@ def build_dataset(cfg, split):
             "min_test_len": cfg.DATA.MIN_TEST_LEN,
         })
         dataset = oVED(**dataset_config)
+    elif data_name == 'oeVED':
+        dataset_config.update({
+            "train_vehicle_ids": cfg.DATA.TRAIN_VEHICLE_IDS if cfg.DATA.TRAIN_VEHICLE_IDS else None,
+            "val_vehicle_ids": cfg.DATA.VAL_VEHICLE_IDS if cfg.DATA.VAL_VEHICLE_IDS else None,
+            "test_vehicle_ids": cfg.DATA.TEST_VEHICLE_IDS if cfg.DATA.TEST_VEHICLE_IDS else None,
+            "min_test_len": cfg.DATA.MIN_TEST_LEN,
+        })
+        dataset = oeVED(**dataset_config)
     else:
         raise ValueError
 
@@ -245,6 +254,21 @@ def update_cfg_from_dataset(cfg: CN, dataset_name: str):
         # cfg.MODEL.c_out = n_var
     
     elif dataset_name == 'oVED':
+        n_var = 13 + 16
+        cfg.DATA.N_VAR = n_var
+        cfg.DATA.FEATURES = 'M'  # single target
+        cfg.DATA.TARGET_START_IDX = 27  # vehicle speed index is 27, Energy_Consumption index is 28
+        # cfg.DATA.TARGET_START_IDX = 0
+        cfg.DATA.PERIOD_LEN = 60
+        cfg.DATA.TRAIN_RATIO = 0.7
+        cfg.DATA.TEST_RATIO = 0.2
+
+        cfg.MODEL.enc_in = n_var
+        cfg.MODEL.dec_in = n_var
+        # cfg.MODEL.c_out = 1   # predict energy consumption
+        cfg.MODEL.c_out = 2   # predict vehicle speed and energy consumption
+        # cfg.MODEL.c_out = n_var
+    elif dataset_name == 'oeVED':
         n_var = 13 + 16
         cfg.DATA.N_VAR = n_var
         cfg.DATA.FEATURES = 'M'  # single target

@@ -526,7 +526,7 @@ class Calibration(nn.Module):
         if cfg.MODEL.NAME in ['PatchTST']:
             self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
             self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
-        elif cfg.MODEL.NAME in ['PatchTSTPCD']:
+        elif cfg.MODEL.NAME in ['PatchTSTPCD', 'LSTM']:
             self.in_cali = None
             # self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
             self.out_cali = GCM(self.pred_len, cfg.MODEL.c_out, self.hidden_dim, self.gating_init, self.var_wise)
