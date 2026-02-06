@@ -21,7 +21,7 @@ MODEL="LSTM"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
 MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM" "TimeXerRoadM" "TimeXerRoadMMh")
-MODELS=("TimeXerRoadM")
+MODELS=("TimeXerRoadMMh")
 # DATASETS=("sVED")
 # DATASETS=("eVED")
 # DATASETS=("oVED")

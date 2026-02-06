@@ -80,6 +80,49 @@ class ChannelMixingHead(nn.Module):
         x = x.reshape(B, self.out_vars, self.target_window)
         return x
 
+class FusedFlattenHead(nn.Module):
+    def __init__(self, in_vars, out_vars, nf, target_window, head_dropout=0):
+        """
+        in_vars: 输入特征的数量 (channels)
+        out_vars: 需要预测的目标变量数量
+        nf: 展平后的特征维度 (d_model * patch_num)
+        target_window: 预测的时间窗口长度
+        """
+        super().__init__()
+        self.in_vars = in_vars
+        self.out_vars = out_vars
+        self.target_window = target_window
+        
+        # 展平最后两维 (d_model, patch_num) 为 nf
+        self.flatten_patch = nn.Flatten(start_dim=-2)
+        
+        # 输入维度: 输入变量数 * 每个变量的特征数
+        self.input_dim = in_vars * nf
+        # 输出维度: 输出变量数 * 预测长度
+        self.output_dim = out_vars * target_window
+        
+        self.linear_fusion = nn.Linear(self.input_dim, self.output_dim)
+        self.dropout = nn.Dropout(head_dropout)
+
+    def forward(self, x): 
+        # x input shape: [Batch, in_vars, d_model, patch_num]
+        
+        # Step 1: 展平 Patch -> [Batch, in_vars, nf]
+        x = self.flatten_patch(x)
+        
+        # Step 2: 展平所有输入变量进行融合 -> [Batch, in_vars * nf]
+        # 使用 reshape 而不是 view 确保内存连续性
+        x = x.reshape(x.shape[0], -1)
+        
+        # Step 3: 全局线性映射 (Channel Mixing & Dimensionality Reduction)
+        x = self.linear_fusion(x)
+        x = self.dropout(x)
+        
+        # Step 4: 还原形状 -> [Batch, out_vars, target_window]
+        # 注意这里使用的是 self.out_vars
+        x = x.reshape(x.shape[0], self.out_vars, self.target_window)
+        return x
+
 # --- 3. Embedding & Encoder (保持不变) ---
 class EnEmbedding(nn.Module):
     def __init__(self, n_vars, d_model, patch_len, dropout):
@@ -208,6 +251,10 @@ class Model(nn.Module):
         self.head = ChannelMixingHead(in_vars=self.n_dynamic, out_vars=self.n_vars, 
                                       nf=self.head_nf, target_window=configs.pred_len, 
                                       head_dropout=configs.dropout)
+
+        # self.head = FusedFlattenHead(in_vars=self.n_dynamic, out_vars=self.n_vars,
+        #                              nf=self.head_nf, target_window=configs.pred_len,
+        #                              head_dropout=configs.dropout)
 
     def _get_statistics(self, x):
         dim2reduce = [1]
