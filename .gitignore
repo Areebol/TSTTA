@@ -26,3 +26,4 @@ checkpoints*/
 *.png
 *.npz
 plots
+docs/

@@ -405,3 +405,218 @@ class PKA_GCM(nn.Module):
                     self.dynamic_keys = self.dynamic_keys[keep_mask]
                     self.dynamic_values = self.dynamic_values[keep_mask]
                     self.dynamic_counts = self.dynamic_counts[keep_mask] - self.dynamic_counts.min()
+
+
+class PKA_OnLine(nn.Module):
+    def __init__(self, window_len, n_var=1, seq_len=96, 
+                 n_static=16, feature_dim=16, temperature=10.0,
+                 bias_momentum=0.1, max_dynamic_capacity=16, **kwargs):
+        """
+        OD-TTA v3.3: Bias-Augmented Orthogonal Prototype Memory
+        包含 Global Bias (粗调) + Static Memory (离线精调) + Dynamic Memory (在线长尾)
+        """
+        super(PKA_OnLine, self).__init__()
+        self.seq_len = seq_len      
+        self.window_len = window_len
+        self.n_var = n_var
+        self.feature_dim = feature_dim
+        self.alpha = bias_momentum
+        self.temperature = temperature
+        self.n_static = n_static
+        self.max_capacity = max_dynamic_capacity # 动态库容量限制
+
+        input_len = seq_len + window_len
+        # 定义 QueryNet_TimeCI (输出 B, V, D)
+        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim) 
+
+        # --- 1. Static Memory (Offline) ---
+        # Static Keys: (n_var, n_static, feature_dim)
+        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, feature_dim))
+        # Static Values: (n_var, n_static, window_len)
+        self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
+        
+        # 初始化 
+        for v in range(n_var):
+            nn.init.orthogonal_(self.static_keys[v])
+        nn.init.zeros_(self.static_values)
+
+        # --- 2. Dynamic Memory (Online) ---
+        # Shape: (Capacity, n_var, feature_dim) 
+        self.register_buffer('dynamic_keys', torch.empty(0, n_var, feature_dim))
+        self.register_buffer('dynamic_values', torch.empty(0, n_var, self.window_len))
+        # LFU Counts: 记录每个动态原型的使用频率，用于删除冗余
+        self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))
+
+        # --- 3. Global Bias (Online) ---
+        # Shape: (window_len, n_var) - 对应预测长度和变量数
+        self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
+
+    def _get_query(self, x, y_base):
+        # 请确保 self.query_net 在外部或此处正确定义
+        query_input = torch.cat([x, y_base], dim=1) 
+        query = self.query_net(query_input) # (B, V, D)
+        query = F.normalize(query, p=2, dim=-1) # 归一化
+        return query
+
+    def forward(self, y_base, x=None):
+        """
+        OD-TTA v3.3 推理流程 
+        Y_final = Y_base + Bias_{t-1} + delta_static + delta_dynamic
+        """
+        batch_size = y_base.shape[0]
+        # 1. 获取 Query: (B, V, D)
+        z_t = self._get_query(x, y_base) 
+
+        # --- 2. Static Retrieval ---
+        # Einsum: bvd (query), vnd (keys) -> bvn (scores)
+        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, F.normalize(self.static_keys, p=2, dim=-1))
+        w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+        
+        # Retrieve Values: bvn, vnh -> bvh -> permute to (B, H, V)
+        delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+        delta_static = delta_static.permute(0, 2, 1)
+
+        # --- 3. Dynamic Retrieval ---
+        delta_dynamic = torch.zeros_like(y_base)
+        
+        if self.dynamic_keys.shape[0] > 0:
+            # Dynamic Keys: (K, V, D)
+            # Query: (B, V, D)
+            # -> bvk (similarity with history snapshots)
+            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
+            
+            # --- LFU Counter Update (During Inference) ---
+            if self.training or True: # 在 TTA 过程中总是更新计数
+                # 找出最相似的 Key 索引
+                best_k = sim_dynamic.argmax(dim=-1) # (B, V)
+                unique_k = torch.unique(best_k)
+                for k_idx in unique_k:
+                    if k_idx < self.dynamic_counts.shape[0]:
+                         self.dynamic_counts[k_idx] += 1.0
+
+            w_dynamic = F.softmax(self.temperature * sim_dynamic, dim=-1) # (B, V, K)
+            
+            # Values: (K, V, H) -> bvh -> (B, H, V)
+            delta_dynamic = torch.einsum('bvk, kvh -> bvh', w_dynamic, self.dynamic_values)
+            delta_dynamic = delta_dynamic.permute(0, 2, 1)
+
+        # --- 4. Final Fusion ---
+        # 注意：Global Bias 是 (H, V)，会自动广播到 (B, H, V)
+        y_final = y_base + self.global_bias + delta_static + delta_dynamic
+        
+        return y_final, z_t
+
+
+    def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
+        """
+        支持部分长度更新的 Bias 校准
+        """
+        # 1. 计算残差
+        if y_base_pred is not None:
+            residual = y_gt - y_base_pred
+        else:
+            residual = y_gt - y_final_pred
+            
+        # residual shape: (B, current_len, V)
+        # current_bias_shift: (current_len, V)
+        current_bias_shift = residual.mean(dim=0)
+        
+        # 2. 获取当前更新的长度
+        current_len = current_bias_shift.shape[0]
+        full_len = self.global_bias.shape[0]
+
+        # 3. 只更新 Bias 中对应的前 current_len 部分
+        if current_len <= full_len:
+            # EMA 更新：只更新观测到的部分
+            self.global_bias[:current_len] = (1 - self.alpha) * self.global_bias[:current_len] + \
+                                             self.alpha * current_bias_shift
+        else:
+            # 理论上不应发生 current_len > full_len，除非配置错误
+            raise ValueError(f"Current bias shift length {current_len} exceeds global bias length {full_len}. Check configuration.")
+
+
+
+    def update_dynamic_memory(self, z_t, y_gt, y_final_pred, threshold=0.2):
+        """
+        OD-TTA v3.3 动态实例记忆更新 
+        基于 Gram-Schmidt 正交化 + 阈值判定 + LFU 淘汰
+        """
+
+        # 安全检查：如果长度不够，直接返回
+        current_len = y_gt.shape[1]
+        if current_len < self.window_len:
+            # [Safety] 长度不足，无法构建完整的 Value 向量，跳过更新
+            return
+
+        batch_size = z_t.shape[0]
+        # Current Error (Residual that creates new pattern): (B, H, V) -> (B, V, H)
+        # New Value = Y_gt - Y_final (当前剩余未被修正的误差)
+        current_err = (y_gt - y_final_pred).permute(0, 2, 1)
+
+        # 1. 构建当前所有已知基向量 (Static + Dynamic)
+        # Static: (V, N, D) -> Permute to (N, V, D)
+        basis_list = [F.normalize(self.static_keys, p=2, dim=-1).permute(1, 0, 2)]
+        
+        if self.dynamic_keys.shape[0] > 0:
+            basis_list.append(self.dynamic_keys) # (K, V, D)
+        
+        # K_all: (Total_Keys, V, D)
+        K_all = torch.cat(basis_list, dim=0)
+
+        # 2. 对 Batch 中每个样本检查是否需要新增
+        # 为了保持 tensor 效率，这里做一个简化：只要 Batch 中有任何一个样本触发阈值，就记录其平均特征
+        # 或者更精细地：逐样本处理 (此处演示 Batch 均值处理，更适合在线流式)
+        
+        # 计算 z_t 在 K_all 上的投影 
+        # z_t: (B, V, D), K_all: (T, V, D)
+        
+        # Proj coeff: (B, T, V)
+        coeffs = torch.einsum('bvd, tvd -> btv', z_t, K_all)
+        
+        # Projection vector: (B, V, D)
+        proj = torch.einsum('btv, tvd -> bvd', coeffs, K_all)
+        
+        # Orthogonal Residual: r_ortho
+        r_ortho = z_t - proj
+        
+        # Energy: (B, V)
+        energy = torch.norm(r_ortho, p=2, dim=-1)
+
+        # --- 判定与执行 ---
+        # 策略：如果 Batch 中平均能量 > 阈值，则新增
+        mean_energy = energy.mean() # Scalar
+        
+        if mean_energy > threshold:
+            # 生成新 Key : 归一化的正交残差
+            # 取 Batch 的平均方向作为新 Pattern
+            r_ortho_mean = r_ortho.mean(dim=0) # (V, D)
+            new_key = F.normalize(r_ortho_mean, p=2, dim=-1)
+            
+            # 生成新 Value : 剩余误差
+            new_value = current_err.mean(dim=0) # (V, H)
+            
+            # LFU 初始化
+            new_count = torch.tensor([5.0], device=z_t.device) # 给一点初始热度
+
+            # Append to Buffer
+            self.dynamic_keys = torch.cat([self.dynamic_keys, new_key.unsqueeze(0)], dim=0)
+            self.dynamic_values = torch.cat([self.dynamic_values, new_value.unsqueeze(0)], dim=0)
+            self.dynamic_counts = torch.cat([self.dynamic_counts, new_count], dim=0)
+
+            # --- 容量管理 (LFU) ---
+            # 如果超出容量，删除 Count 最小的
+            if self.dynamic_keys.shape[0] > self.max_capacity:
+                # 找出最小 Count 的索引
+                min_idx = torch.argmin(self.dynamic_counts)
+                
+                # 创建保留 Mask
+                keep_mask = torch.ones(self.dynamic_keys.shape[0], dtype=torch.bool, device=z_t.device)
+                keep_mask[min_idx] = False
+                
+                # 执行删除
+                self.dynamic_keys = self.dynamic_keys[keep_mask]
+                self.dynamic_values = self.dynamic_values[keep_mask]
+                self.dynamic_counts = self.dynamic_counts[keep_mask]
+                
+                # 归一化 Counts (防止无限增长)
+                self.dynamic_counts = self.dynamic_counts - self.dynamic_counts.min()

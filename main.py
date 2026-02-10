@@ -14,6 +14,7 @@ import tta.tta_dual as tta_dual
 import tta.tta_ours as tta_ours
 import tta.dynatta as dynatta
 import tta.tta_pka as tta_pka
+import tta.tta_pka_online as tta_pka_online
 import tta.tta_coba_online as tta_coba_online
 from tta.tta_output import build_tta_runner
 from config import get_norm_module_cfg
@@ -69,6 +70,8 @@ def main():
             adapter = tta_coba_online.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "PKA":
             adapter = tta_pka.build_adapter(cfg, model)
+        elif cfg.TTA.METHOD == "PKA_OnLine":
+            adapter = tta_pka_online.build_adapter(cfg, model)
         else:
             print(f"Unknown TTA method: {cfg.TTA.METHOD}")
         
