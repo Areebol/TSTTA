@@ -175,12 +175,12 @@ class Adapter(nn.Module):
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
         
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_OnLine' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-            parts.append("coba-offline")
+            parts.append("pka-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
             parts.append(f'ortho-{self.cfg.TTA.PKA.LAMBDA_ORTHO}')
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_OnLine' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-            parts.append("coba-online")
+            parts.append("pka-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
         
@@ -302,7 +302,7 @@ class Adapter(nn.Module):
                         if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
                             # Step 4.1: Update Bias (Always Run) 
                             # 使用 Y_base 误差更新 Bias 更稳健 
-                            self.cali.out_cali.update_bias(ground_truth, y_base_pred=pred_base)
+                            # self.cali.out_cali.update_bias(ground_truth, y_base_pred=pred_base)
                             
                             # Step 4.2: Update Dynamic Memory (Conditional) 
                             # 基于 Y_final 的剩余误差来决定是否新增
@@ -310,7 +310,7 @@ class Adapter(nn.Module):
                                 z_t=z_t, 
                                 y_gt=ground_truth, 
                                 y_final_pred=pred_final,
-                                threshold=self.cfg.TTA.PKA.ENERGY_THRESHOLD
+                                # threshold=self.cfg.TTA.PKA.ENERGY_THRESHOLD
                             )
                     else:
                         pred_final = self.cali.output_calibration(pred_base)
@@ -346,12 +346,12 @@ class Adapter(nn.Module):
                     # =========================================================
                     # 在线更新流程
                     # =========================================================
-                    if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-                        # Update Bias Only
-                        self.cali.out_cali.update_bias(
-                            ground_truth_partial, 
-                            y_base_pred=pred_base_partial
-                        )
+                    # if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+                    #     # Update Bias Only
+                    #     self.cali.out_cali.update_bias(
+                    #         ground_truth_partial, 
+                    #         y_base_pred=pred_base_partial
+                    #     )
 
                 else:
                     pred_final = self.cali.output_calibration(pred_base)

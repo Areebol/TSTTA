@@ -410,7 +410,7 @@ class PKA_GCM(nn.Module):
 class PKA_OnLine(nn.Module):
     def __init__(self, window_len, n_var=1, seq_len=96, 
                  n_static=16, feature_dim=16, temperature=10.0,
-                 bias_momentum=0.1, max_dynamic_capacity=16, **kwargs):
+                 bias_momentum=0.1, energy_threshold=0.1, max_dynamic_capacity=16, **kwargs):
         """
         OD-TTA v3.3: Bias-Augmented Orthogonal Prototype Memory
         包含 Global Bias (粗调) + Static Memory (离线精调) + Dynamic Memory (在线长尾)
@@ -424,10 +424,11 @@ class PKA_OnLine(nn.Module):
         self.temperature = temperature
         self.n_static = n_static
         self.max_capacity = max_dynamic_capacity # 动态库容量限制
+        self.energy_threshold = energy_threshold # 新模式判定阈值
 
         input_len = seq_len + window_len
         # 定义 QueryNet_TimeCI (输出 B, V, D)
-        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim) 
+        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim)
 
         # --- 1. Static Memory (Offline) ---
         # Static Keys: (n_var, n_static, feature_dim)
@@ -536,7 +537,7 @@ class PKA_OnLine(nn.Module):
 
 
 
-    def update_dynamic_memory(self, z_t, y_gt, y_final_pred, threshold=0.2):
+    def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
         """
         OD-TTA v3.3 动态实例记忆更新 
         基于 Gram-Schmidt 正交化 + 阈值判定 + LFU 淘汰
@@ -586,7 +587,8 @@ class PKA_OnLine(nn.Module):
         # 策略：如果 Batch 中平均能量 > 阈值，则新增
         mean_energy = energy.mean() # Scalar
         
-        if mean_energy > threshold:
+        if mean_energy > self.energy_threshold:
+            print(f"[PKA_OnLine] Adding new dynamic pattern. Mean energy: {mean_energy.item():.4f}")
             # 生成新 Key : 归一化的正交残差
             # 取 Batch 的平均方向作为新 Pattern
             r_ortho_mean = r_ortho.mean(dim=0) # (V, D)
