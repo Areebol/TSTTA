@@ -47,6 +47,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'identity': IdentityAdapter,
         'PKA_GCM': PKA_GCM, 
         'PKA_OnLine': PKA_OnLine,
+        'PKA_LDict': PKA_LDict,
     }
     if model_type == 'CoBA_GCM':
         coba_params = {
@@ -61,7 +62,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'seq_len': seq_len,
         }
         params.update(coba_params)
-    elif model_type == 'PKA_OnLine':
+    elif model_type in ['PKA_OnLine', 'PKA_LDict']:
         coba_params = {
             'n_static': cfg.TTA.PKA.N_PATTERNS,
             'energy_threshold': cfg.TTA.PKA.ENERGY_THRESHOLD,
@@ -183,6 +184,16 @@ class Adapter(nn.Module):
             parts.append("pka-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+
+        elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("pka-ldict-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
+        elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("pka-ldict-online")
+            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
+            # parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
         
         
         else:
@@ -202,7 +213,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, PKA_GCM, PKA_OnLine)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, PKA_GCM, PKA_OnLine, PKA_LDict)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.PKA.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
@@ -222,7 +233,7 @@ class Adapter(nn.Module):
                 
                 # output correction
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine)):
+                    if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine, PKA_LDict)):
                         pred, z_t = self.cali.output_calibration(pred, inputs=enc_window_all)
                     else:
                         pred = self.cali.output_calibration(pred)
@@ -291,7 +302,7 @@ class Adapter(nn.Module):
                 
                 # 2. Get Final Prediction & Query
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine)):
+                    if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine, PKA_LDict)):
                         enc_history = prepare_inputs(inputs_history)[0]
                         # Forward pass to get Y_final and z_t
                         pred_final, z_t = self.cali.output_calibration(pred_base, enc_history)
@@ -332,7 +343,7 @@ class Adapter(nn.Module):
         
             # 2. Output Calibration & Update
             if self.cali.output_calibration is not None:
-                if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine)):
+                if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine, PKA_LDict)):
                     enc_window = prepare_inputs(inputs)[0]
                     # Forward
                     pred_final, z_t = self.cali.output_calibration(pred_base, enc_window)
@@ -364,7 +375,7 @@ class Adapter(nn.Module):
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
-            if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine)):
+            if isinstance(self.cali.out_cali, (PKA_GCM, PKA_OnLine, PKA_LDict)):
                 enc_window = prepare_inputs(inputs)[0]
                 pred_after_adapt, z_t = self.cali.output_calibration(pred_after_adapt, enc_window)
             else:

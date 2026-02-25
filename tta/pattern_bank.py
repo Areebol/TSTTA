@@ -622,3 +622,245 @@ class PKA_OnLine(nn.Module):
                 
                 # 归一化 Counts (防止无限增长)
                 self.dynamic_counts = self.dynamic_counts - self.dynamic_counts.min()
+
+
+class PKA_LDict(nn.Module):
+    def __init__(self, window_len, n_var=1, seq_len=96, 
+                 n_static=16, feature_dim=16, temperature=10.0,
+                 bias_momentum=0.1, energy_threshold=0.1, max_dynamic_capacity=16, 
+                 sim_threshold=0.8, ema_alpha=0.1, **kwargs):
+        """
+        OD-TTA v3.4: Bias-Augmented Orthogonal Prototype Memory
+        包含 Global Bias (粗调) + Static Memory (离线精调, QR硬正交) + Dynamic Memory (在线长尾)
+        """
+        super(PKA_LDict, self).__init__()
+        self.seq_len = seq_len      
+        self.window_len = window_len
+        self.n_var = n_var
+        self.feature_dim = feature_dim
+        self.alpha = bias_momentum
+        self.temperature = temperature
+        self.n_static = n_static
+        self.max_capacity = max_dynamic_capacity 
+        self.energy_threshold = energy_threshold 
+        self.sim_threshold = sim_threshold 
+        self.ema_alpha = ema_alpha 
+
+        input_len = seq_len + window_len
+        # 定义 QueryNet_TimeCI (输出 B, V, D)
+        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim)
+
+        # --- 1. Static Memory (Offline) ---
+        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, feature_dim))
+        self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
+        
+        # 缓存变量，用于推理加速
+        self._cached_strict_keys = None
+
+        for v in range(n_var):
+            nn.init.orthogonal_(self.static_keys[v])
+        nn.init.zeros_(self.static_values)
+
+        # --- 2. Dynamic Memory (Online) ---
+        self.register_buffer('dynamic_keys', torch.empty(0, n_var, feature_dim))
+        self.register_buffer('dynamic_values', torch.empty(0, n_var, self.window_len))
+        self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))
+
+        # --- 3. Global Bias (Online) ---
+        self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
+
+    def train(self, mode=True):
+        """
+        重写 train() 方法：
+        当切换回 train 模式时，清空缓存，确保每次前向传播都计算 QR 分解并回传梯度；
+        当切换为 eval 模式时，缓存清空，以便下一次 forward 重新计算一次性正交基。
+        """
+        super().train(mode)
+        self._cached_strict_keys = None
+        return self
+
+    def _get_strict_static_keys(self):
+        """
+        批量 QR 分解生成严格正交基 (Hard Orthogonal Constraint)
+        """
+        # 如果是评估模式且已缓存，直接返回（推理零开销）
+        if not self.training and self._cached_strict_keys is not None:
+            return self._cached_strict_keys
+
+        # QR 分解要求对矩阵的列进行正交化，转置为 (n_var, feature_dim, n_static)
+        W_T = self.static_keys.transpose(1, 2)
+        
+        # 执行批量 QR 分解，Q 即为严格正交矩阵，且 Q^T Q = I, 无需进行归一化
+        Q, R = torch.linalg.qr(W_T)
+        
+        # 转置回 (n_var, n_static, feature_dim)
+        strict_keys = Q.transpose(1, 2)
+
+        # 如果进入了测试模式，执行缓存
+        if not self.training:
+            self._cached_strict_keys = strict_keys.detach()
+
+        return strict_keys
+
+    def _get_query(self, x, y_base):
+        # 请确保 self.query_net 在外部或此处正确定义
+        query_input = torch.cat([x, y_base], dim=1) 
+        query = self.query_net(query_input) # (B, V, D)
+        query = F.normalize(query, p=2, dim=-1) # 归一化
+        return query
+
+    def forward(self, y_base, x=None):
+        batch_size = y_base.shape[0]
+        z_t = self._get_query(x, y_base) 
+
+        # --- 2. 获取严格正交的静态 Keys ---
+        strict_static_keys = self._get_strict_static_keys()
+        
+        # sim_static: bvd, vnd -> bvn
+        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, strict_static_keys)
+        
+        delta_dynamic = torch.zeros_like(y_base)
+        
+        # --- 3. 联合 Softmax 检索 ---
+        if self.dynamic_keys.shape[0] > 0:
+            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
+            
+            sim_all = torch.cat([sim_static, sim_dynamic], dim=-1) # (B, V, N + K)
+            w_all = F.softmax(self.temperature * sim_all, dim=-1)  
+            
+            w_static = w_all[:, :, :self.n_static]   
+            w_dynamic = w_all[:, :, self.n_static:]  
+            
+            if self.training or True: 
+                best_k = sim_dynamic.argmax(dim=-1) 
+                unique_k = torch.unique(best_k)
+                for k_idx in unique_k:
+                    if k_idx < self.dynamic_counts.shape[0]:
+                         self.dynamic_counts[k_idx] += 1.0
+
+            delta_dynamic = torch.einsum('bvk, kvh -> bvh', w_dynamic, self.dynamic_values)
+            delta_dynamic = delta_dynamic.permute(0, 2, 1)
+            
+        else:
+            w_static = F.softmax(self.temperature * sim_static, dim=-1)
+
+        # --- 4. 提取静态残差 ---
+        delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+        delta_static = delta_static.permute(0, 2, 1)
+
+        y_final = y_base + self.global_bias + delta_static + delta_dynamic
+        
+        return y_final, z_t
+
+
+    def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
+
+        if y_base_pred is not None:
+            residual = y_gt - y_base_pred
+        else:
+            residual = y_gt - y_final_pred
+            
+        current_bias_shift = residual.mean(dim=0)
+        current_len = current_bias_shift.shape[0]
+        full_len = self.global_bias.shape[0]
+
+        if current_len <= full_len:
+            self.global_bias[:current_len] = (1 - self.alpha) * self.global_bias[:current_len] + \
+                                             self.alpha * current_bias_shift
+        else:
+            raise ValueError(f"Length {current_len} exceeds bias length {full_len}.")
+
+
+    def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
+        current_len = y_gt.shape[1]
+        if current_len < self.window_len:
+            return
+
+        current_err = (y_gt - y_final_pred).permute(0, 2, 1)
+        
+        # ==========================================================
+        # 0. 增量学习阶段 (EMA Finetuning)
+        # ==========================================================
+        if self.dynamic_keys.shape[0] > 0:
+            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
+            max_sim, best_k_idx = torch.max(sim_dynamic, dim=-1) 
+            update_mask = max_sim > self.sim_threshold 
+            
+            for b in range(z_t.shape[0]):
+                for v in range(z_t.shape[1]):
+                    if update_mask[b, v]:
+                        k_idx = best_k_idx[b, v]
+                        self.dynamic_values[k_idx, v, :] += self.ema_alpha * current_err[b, v, :]
+
+        # ==========================================================
+        # 1. 提取安全的 K_all (静态基直接用 QR 后的结果)
+        # ==========================================================
+        strict_static_keys = self._get_strict_static_keys()
+        
+        # 此时 strict_static_keys 已经是正交且归一化过的了，不需要 F.normalize
+        basis_list = [strict_static_keys.permute(1, 0, 2)]
+        if self.dynamic_keys.shape[0] > 0:
+            basis_list.append(F.normalize(self.dynamic_keys, p=2, dim=-1))
+        K_all = torch.cat(basis_list, dim=0) # (T, V, D)
+
+        # ==========================================================
+        # 2. 实时生成绝对正交基 (Strict Orthonormalization)
+        # 防护浮点漂移导致 max_energy > 1.0 的终极保险
+        # ==========================================================
+        Q_list = []
+        for t in range(K_all.shape[0]):
+            v = K_all[t].clone() 
+            for q in Q_list:
+                overlap = torch.einsum('vd, vd -> v', v, q).unsqueeze(-1) 
+                v = v - overlap * q
+            
+            norm = torch.norm(v, p=2, dim=-1, keepdim=True)
+            v = torch.where(norm > 1e-5, v / norm, torch.zeros_like(v))
+            Q_list.append(v)
+            
+        K_ortho = torch.stack(Q_list, dim=0) # (T, V, D)
+
+        # ==========================================================
+        # 3. 计算投影和正交残差
+        # ==========================================================
+        coeffs = torch.einsum('bvd, tvd -> btv', z_t, K_ortho)
+        proj = torch.einsum('btv, tvd -> bvd', coeffs, K_ortho)
+        r_ortho = z_t - proj
+        
+        energy = torch.norm(r_ortho, p=2, dim=-1)
+
+        # ==========================================================
+        # 4. Hard Mining + 新增模式
+        # ==========================================================
+        max_energy_per_sample = energy.mean(dim=1) 
+        best_sample_idx = torch.argmax(max_energy_per_sample)
+        max_energy = max_energy_per_sample[best_sample_idx]
+
+        if max_energy > self.energy_threshold:
+            print(f"[PKA_OnLine] New Pattern Triggered! Max energy: {max_energy.item():.4f}")
+            
+            raw_new_key = r_ortho[best_sample_idx] 
+            new_value = current_err[best_sample_idx] 
+
+            # 二次正交化 (使用绝对正交的 K_ortho)
+            for t in range(K_ortho.shape[0]):
+                basis_v = K_ortho[t] 
+                overlap = torch.einsum('vd, vd -> v', raw_new_key, basis_v).unsqueeze(-1)
+                raw_new_key = raw_new_key - overlap * basis_v
+                
+            new_key = F.normalize(raw_new_key, p=2, dim=-1) 
+            new_count = torch.tensor([5.0], device=z_t.device)
+
+            self.dynamic_keys = torch.cat([self.dynamic_keys, new_key.unsqueeze(0)], dim=0)
+            self.dynamic_values = torch.cat([self.dynamic_values, new_value.unsqueeze(0)], dim=0)
+            self.dynamic_counts = torch.cat([self.dynamic_counts, new_count], dim=0)
+
+            if self.dynamic_keys.shape[0] > self.max_capacity:
+                min_idx = torch.argmin(self.dynamic_counts)
+                keep_mask = torch.ones(self.dynamic_keys.shape[0], dtype=torch.bool, device=z_t.device)
+                keep_mask[min_idx] = False
+                
+                self.dynamic_keys = self.dynamic_keys[keep_mask]
+                self.dynamic_values = self.dynamic_values[keep_mask]
+                self.dynamic_counts = self.dynamic_counts[keep_mask]
+                self.dynamic_counts = self.dynamic_counts - self.dynamic_counts.min()
