@@ -426,6 +426,9 @@ class PKA_OnLine(nn.Module):
         self.max_capacity = max_dynamic_capacity # 动态库容量限制
         self.energy_threshold = energy_threshold # 新模式判定阈值
 
+        if feature_dim <= n_static:
+            self.feature_dim = n_static * 2
+        
         input_len = seq_len + window_len
         # 定义 QueryNet_TimeCI (输出 B, V, D)
         self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim)
@@ -626,7 +629,7 @@ class PKA_OnLine(nn.Module):
 
 class PKA_LDict(nn.Module):
     def __init__(self, window_len, n_var=1, seq_len=96, 
-                 n_static=16, feature_dim=16, temperature=10.0,
+                 n_static=16, feature_dim=32, temperature=10.0,
                  bias_momentum=0.1, energy_threshold=0.1, max_dynamic_capacity=16, 
                  sim_threshold=0.8, ema_alpha=0.1, **kwargs):
         """
@@ -645,6 +648,9 @@ class PKA_LDict(nn.Module):
         self.energy_threshold = energy_threshold 
         self.sim_threshold = sim_threshold 
         self.ema_alpha = ema_alpha 
+
+        if feature_dim <= n_static:
+            self.feature_dim = n_static * 2
 
         input_len = seq_len + window_len
         # 定义 QueryNet_TimeCI (输出 B, V, D)
@@ -702,6 +708,35 @@ class PKA_LDict(nn.Module):
 
         return strict_keys
 
+    # def _get_strict_static_keys(self):
+    #     """
+    #     批量 SVD 分解生成最优严格正交基 (Symmetric Orthogonalization)
+    #     保证在绝对正交的前提下，与原参数的变化量最小。
+    #     """
+    #     if not self.training and self._cached_strict_keys is not None:
+    #         return self._cached_strict_keys
+
+    #     # 转置为 (n_var, feature_dim, n_static)
+    #     W_T = self.static_keys.transpose(1, 2)
+        
+    #     # ---------------------------------------------------------
+    #     # 使用 SVD 替代 QR
+    #     # W_T = U * S * Vh
+    #     # full_matrices=False 保证计算效率，仅计算截断 SVD
+    #     # ---------------------------------------------------------
+    #     U, S, Vh = torch.linalg.svd(W_T, full_matrices=False)
+        
+    #     # 最接近 W_T 的纯正交矩阵就是 U 和 Vh 的乘积
+    #     Q = torch.matmul(U, Vh)
+        
+    #     # 转置回 (n_var, n_static, feature_dim)
+    #     strict_keys = Q.transpose(1, 2)
+
+    #     if not self.training:
+    #         self._cached_strict_keys = strict_keys.detach()
+
+    #     return strict_keys
+
     def _get_query(self, x, y_base):
         # 请确保 self.query_net 在外部或此处正确定义
         query_input = torch.cat([x, y_base], dim=1) 
@@ -744,6 +779,7 @@ class PKA_LDict(nn.Module):
         else:
             w_static = F.softmax(self.temperature * sim_static, dim=-1)
 
+        breakpoint()
         # --- 4. 提取静态残差 ---
         delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
         delta_static = delta_static.permute(0, 2, 1)

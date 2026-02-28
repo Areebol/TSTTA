@@ -71,6 +71,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'bias_momentum': cfg.TTA.PKA.BIAS_MOMENTUM,
             'max_dynamic_capacity': cfg.TTA.PKA.MAX_DYNAMIC_CAPACITY,
             'temperature': cfg.TTA.PKA.TEMPERATURE,
+            'feature_dim': cfg.TTA.PKA.GCM_FEA_DIM,
         }
         params.update(coba_params)
     elif model_type in ['lowrank-coba-GCM']:

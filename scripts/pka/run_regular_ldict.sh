@@ -1,6 +1,6 @@
 #!/bin/bash
 # NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
-NPUS=(7)          # Available NPU IDs
+NPUS=(4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=1               # Parallel jobs per NPU
@@ -18,9 +18,10 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTh1")
 
 PRED_LENS=(96 192 336 720)
-PRED_LENS=(336)
+PRED_LENS=(720)
 # PATTERN_NUMS=(2 4 8 16 32 64 128 256 512)
-PATTERN_NUMS=(16)
+PATTERN_NUMS=(64)
+# PATTERN_NUMS=(16)
 # PATTERN_NUMS=(128)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
@@ -98,7 +99,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.PKA.ENERGY_THRESHOLD 0.1 \
     TTA.PKA.CALI_INPUT_ENABLE False \
     TTA.PKA.CALI_OUTPUT_ENABLE True \
-    TTA.PKA.COBA_ONLINE_ENABLED True \
+    TTA.PKA.COBA_ONLINE_ENABLED False \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
