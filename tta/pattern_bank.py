@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils.parametrizations as parametrizations
 from tta.tta_dual_utils.query_net import *
 
 # class PKA_GCM(nn.Module):
@@ -634,7 +635,7 @@ class PKA_LDict(nn.Module):
                  sim_threshold=0.8, ema_alpha=0.1, **kwargs):
         """
         OD-TTA v3.4: Bias-Augmented Orthogonal Prototype Memory
-        包含 Global Bias (粗调) + Static Memory (离线精调, QR硬正交) + Dynamic Memory (在线长尾)
+        包含 Global Bias (粗调) + Static Memory (离线精调, 原生正交参数化) + Dynamic Memory (在线长尾)
         """
         super(PKA_LDict, self).__init__()
         self.seq_len = seq_len      
@@ -654,88 +655,26 @@ class PKA_LDict(nn.Module):
 
         input_len = seq_len + window_len
         # 定义 QueryNet_TimeCI (输出 B, V, D)
-        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim)
+        self.query_net = QueryNet_TimeCI(input_len, n_var, self.feature_dim)
 
         # --- 1. Static Memory (Offline) ---
-        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, feature_dim))
+        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, self.feature_dim))
         self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
         
-        # 缓存变量，用于推理加速
-        self._cached_strict_keys = None
-
-        for v in range(n_var):
-            nn.init.orthogonal_(self.static_keys[v])
+        # 绝对正交约束
+        # 这会自动在后续前向计算中将 static_keys 映射到绝对正交流形上
+        # 对于 (V, N, D) 且 N <= D 的情况，它保证每个 V 下的 N 个 D 维向量彼此绝对正交且模长为 1
+        parametrizations.orthogonal(self, "static_keys")
+        
         nn.init.zeros_(self.static_values)
 
         # --- 2. Dynamic Memory (Online) ---
-        self.register_buffer('dynamic_keys', torch.empty(0, n_var, feature_dim))
+        self.register_buffer('dynamic_keys', torch.empty(0, n_var, self.feature_dim))
         self.register_buffer('dynamic_values', torch.empty(0, n_var, self.window_len))
         self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))
 
         # --- 3. Global Bias (Online) ---
         self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
-
-    def train(self, mode=True):
-        """
-        重写 train() 方法：
-        当切换回 train 模式时，清空缓存，确保每次前向传播都计算 QR 分解并回传梯度；
-        当切换为 eval 模式时，缓存清空，以便下一次 forward 重新计算一次性正交基。
-        """
-        super().train(mode)
-        self._cached_strict_keys = None
-        return self
-
-    def _get_strict_static_keys(self):
-        """
-        批量 QR 分解生成严格正交基 (Hard Orthogonal Constraint)
-        """
-        # 如果是评估模式且已缓存，直接返回（推理零开销）
-        if not self.training and self._cached_strict_keys is not None:
-            return self._cached_strict_keys
-
-        # QR 分解要求对矩阵的列进行正交化，转置为 (n_var, feature_dim, n_static)
-        W_T = self.static_keys.transpose(1, 2)
-        
-        # 执行批量 QR 分解，Q 即为严格正交矩阵，且 Q^T Q = I, 无需进行归一化
-        Q, R = torch.linalg.qr(W_T)
-        
-        # 转置回 (n_var, n_static, feature_dim)
-        strict_keys = Q.transpose(1, 2)
-
-        # 如果进入了测试模式，执行缓存
-        if not self.training:
-            self._cached_strict_keys = strict_keys.detach()
-
-        return strict_keys
-
-    # def _get_strict_static_keys(self):
-    #     """
-    #     批量 SVD 分解生成最优严格正交基 (Symmetric Orthogonalization)
-    #     保证在绝对正交的前提下，与原参数的变化量最小。
-    #     """
-    #     if not self.training and self._cached_strict_keys is not None:
-    #         return self._cached_strict_keys
-
-    #     # 转置为 (n_var, feature_dim, n_static)
-    #     W_T = self.static_keys.transpose(1, 2)
-        
-    #     # ---------------------------------------------------------
-    #     # 使用 SVD 替代 QR
-    #     # W_T = U * S * Vh
-    #     # full_matrices=False 保证计算效率，仅计算截断 SVD
-    #     # ---------------------------------------------------------
-    #     U, S, Vh = torch.linalg.svd(W_T, full_matrices=False)
-        
-    #     # 最接近 W_T 的纯正交矩阵就是 U 和 Vh 的乘积
-    #     Q = torch.matmul(U, Vh)
-        
-    #     # 转置回 (n_var, n_static, feature_dim)
-    #     strict_keys = Q.transpose(1, 2)
-
-    #     if not self.training:
-    #         self._cached_strict_keys = strict_keys.detach()
-
-    #     return strict_keys
 
     def _get_query(self, x, y_base):
         # 请确保 self.query_net 在外部或此处正确定义
@@ -748,11 +687,8 @@ class PKA_LDict(nn.Module):
         batch_size = y_base.shape[0]
         z_t = self._get_query(x, y_base) 
 
-        # --- 2. 获取严格正交的静态 Keys ---
-        strict_static_keys = self._get_strict_static_keys()
-        
-        # sim_static: bvd, vnd -> bvn
-        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, strict_static_keys)
+        # --- 2. 静态检索 (直接使用，PyTorch在底层会自动计算出正交后的 static_keys) ---
+        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, self.static_keys)
         
         delta_dynamic = torch.zeros_like(y_base)
         
@@ -779,7 +715,6 @@ class PKA_LDict(nn.Module):
         else:
             w_static = F.softmax(self.temperature * sim_static, dim=-1)
 
-        breakpoint()
         # --- 4. 提取静态残差 ---
         delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
         delta_static = delta_static.permute(0, 2, 1)
@@ -787,7 +722,6 @@ class PKA_LDict(nn.Module):
         y_final = y_base + self.global_bias + delta_static + delta_dynamic
         
         return y_final, z_t
-
 
     def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
 
@@ -805,7 +739,6 @@ class PKA_LDict(nn.Module):
                                              self.alpha * current_bias_shift
         else:
             raise ValueError(f"Length {current_len} exceeds bias length {full_len}.")
-
 
     def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
         current_len = y_gt.shape[1]
@@ -829,12 +762,9 @@ class PKA_LDict(nn.Module):
                         self.dynamic_values[k_idx, v, :] += self.ema_alpha * current_err[b, v, :]
 
         # ==========================================================
-        # 1. 提取安全的 K_all (静态基直接用 QR 后的结果)
+        # 1. 提取安全的 K_all (此时 self.static_keys 天然具备绝对正交性)
         # ==========================================================
-        strict_static_keys = self._get_strict_static_keys()
-        
-        # 此时 strict_static_keys 已经是正交且归一化过的了，不需要 F.normalize
-        basis_list = [strict_static_keys.permute(1, 0, 2)]
+        basis_list = [self.static_keys.permute(1, 0, 2)]
         if self.dynamic_keys.shape[0] > 0:
             basis_list.append(F.normalize(self.dynamic_keys, p=2, dim=-1))
         K_all = torch.cat(basis_list, dim=0) # (T, V, D)
