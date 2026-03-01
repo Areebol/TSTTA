@@ -656,15 +656,19 @@ class PKA_LDict(nn.Module):
         input_len = seq_len + window_len
         # 定义 QueryNet_TimeCI (输出 B, V, D)
         self.query_net = QueryNet_TimeCI(input_len, n_var, self.feature_dim)
+        # self.query_net = QueryNet_Freq_Base_ChannelDependence(input_len, n_var, self.feature_dim)
 
         # --- 1. Static Memory (Offline) ---
         self.static_keys = nn.Parameter(torch.randn(n_var, n_static, self.feature_dim))
         self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
         
-        # 绝对正交约束
+        ### 绝对正交约束
         # 这会自动在后续前向计算中将 static_keys 映射到绝对正交流形上
         # 对于 (V, N, D) 且 N <= D 的情况，它保证每个 V 下的 N 个 D 维向量彼此绝对正交且模长为 1
-        parametrizations.orthogonal(self, "static_keys")
+        # parametrizations.orthogonal(self, "static_keys")
+        # 正交初始化
+        for v in range(n_var):
+            nn.init.orthogonal_(self.static_keys[v])
         
         nn.init.zeros_(self.static_values)
 
