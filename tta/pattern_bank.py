@@ -634,8 +634,8 @@ class PKA_LDict(nn.Module):
                  bias_momentum=0.1, energy_threshold=0.1, max_dynamic_capacity=16, 
                  sim_threshold=0.8, ema_alpha=0.1, **kwargs):
         """
-        OD-TTA v3.4: Bias-Augmented Orthogonal Prototype Memory
-        包含 Global Bias (粗调) + Static Memory (离线精调, 原生正交参数化) + Dynamic Memory (在线长尾)
+        OD-TTA v3.4 (Fixed): Bias-Augmented Orthogonal Prototype Memory
+        包含 Global Bias (粗调) + Static Memory (离线精调, 稳定基底) + Dynamic Memory (独立路由, 在线长尾)
         """
         super(PKA_LDict, self).__init__()
         self.seq_len = seq_len      
@@ -662,14 +662,9 @@ class PKA_LDict(nn.Module):
         self.static_keys = nn.Parameter(torch.randn(n_var, n_static, self.feature_dim))
         self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
         
-        ### 绝对正交约束
-        # 这会自动在后续前向计算中将 static_keys 映射到绝对正交流形上
-        # 对于 (V, N, D) 且 N <= D 的情况，它保证每个 V 下的 N 个 D 维向量彼此绝对正交且模长为 1
-        # parametrizations.orthogonal(self, "static_keys")
         # 正交初始化
         for v in range(n_var):
             nn.init.orthogonal_(self.static_keys[v])
-        
         nn.init.zeros_(self.static_values)
 
         # --- 2. Dynamic Memory (Online) ---
@@ -681,7 +676,6 @@ class PKA_LDict(nn.Module):
         self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
 
     def _get_query(self, x, y_base):
-        # 请确保 self.query_net 在外部或此处正确定义
         query_input = torch.cat([x, y_base], dim=1) 
         query = self.query_net(query_input) # (B, V, D)
         query = F.normalize(query, p=2, dim=-1) # 归一化
@@ -691,44 +685,49 @@ class PKA_LDict(nn.Module):
         batch_size = y_base.shape[0]
         z_t = self._get_query(x, y_base) 
 
-        # --- 2. 静态检索 (直接使用，PyTorch在底层会自动计算出正交后的 static_keys) ---
+        # ==========================================
+        # 1. 静态检索 (使用 Softmax 保持离线一致性)
+        # ==========================================
         sim_static = torch.einsum('bvd, vnd -> bvn', z_t, self.static_keys)
-        
-        delta_dynamic = torch.zeros_like(y_base)
-        
-        # --- 3. 联合 Softmax 检索 ---
-        if self.dynamic_keys.shape[0] > 0:
-            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
-            
-            sim_all = torch.cat([sim_static, sim_dynamic], dim=-1) # (B, V, N + K)
-            w_all = F.softmax(self.temperature * sim_all, dim=-1)  
-            
-            w_static = w_all[:, :, :self.n_static]   
-            w_dynamic = w_all[:, :, self.n_static:]  
-            
-            if self.training or True: 
-                best_k = sim_dynamic.argmax(dim=-1) 
-                unique_k = torch.unique(best_k)
-                for k_idx in unique_k:
-                    if k_idx < self.dynamic_counts.shape[0]:
-                         self.dynamic_counts[k_idx] += 1.0
-
-            delta_dynamic = torch.einsum('bvk, kvh -> bvh', w_dynamic, self.dynamic_values)
-            delta_dynamic = delta_dynamic.permute(0, 2, 1)
-            
-        else:
-            w_static = F.softmax(self.temperature * sim_static, dim=-1)
-
-        # --- 4. 提取静态残差 ---
+        w_static = F.softmax(self.temperature * sim_static, dim=-1)
         delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
         delta_static = delta_static.permute(0, 2, 1)
 
+        # ==========================================
+        # 2. 动态检索 (独立路由机制，防止稀释静态权重)
+        # ==========================================
+        delta_dynamic = torch.zeros_like(y_base)
+        
+        if self.dynamic_keys.shape[0] > 0:
+            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
+            
+            # 使用带阈值的线性截断 (Thresholded Gating) 替代 Softmax
+            # 如果相似度 <= threshold，权重为 0；如果相似度为 1.0，权重为 1.0
+            w_dynamic = torch.clamp((sim_dynamic - self.sim_threshold) / (1.0 - self.sim_threshold + 1e-5), min=0.0)
+
+            # 更新使用计数
+            if self.training or True: 
+                best_k = sim_dynamic.argmax(dim=-1) 
+                max_sim_k, _ = sim_dynamic.max(dim=-1)
+                valid_mask = max_sim_k > self.sim_threshold
+                
+                # 只统计有效激活的 Key
+                unique_k = torch.unique(best_k[valid_mask])
+                for k_idx in unique_k:
+                    if k_idx < self.dynamic_counts.shape[0]:
+                        self.dynamic_counts[k_idx] += 1.0
+
+            delta_dynamic = torch.einsum('bvk, kvh -> bvh', w_dynamic, self.dynamic_values)
+            delta_dynamic = delta_dynamic.permute(0, 2, 1)
+
+        # ==========================================
+        # 3. 最终融合
+        # ==========================================
         y_final = y_base + self.global_bias + delta_static + delta_dynamic
         
         return y_final, z_t
 
     def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
-
         if y_base_pred is not None:
             residual = y_gt - y_base_pred
         else:
@@ -749,82 +748,79 @@ class PKA_LDict(nn.Module):
         if current_len < self.window_len:
             return
 
-        current_err = (y_gt - y_final_pred).permute(0, 2, 1)
+        # 计算当前残差误差 (B, V, H)
+        current_err = (y_gt - y_final_pred).permute(0, 2, 1) 
         
         # ==========================================================
         # 0. 增量学习阶段 (EMA Finetuning)
+        # [修复] 批量防重叠求均值，防止同一个 batch 多次重复累加同一个 Key
         # ==========================================================
         if self.dynamic_keys.shape[0] > 0:
+            # sim_dynamic: (B, V, K)
             sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
             max_sim, best_k_idx = torch.max(sim_dynamic, dim=-1) 
             update_mask = max_sim > self.sim_threshold 
             
-            for b in range(z_t.shape[0]):
-                for v in range(z_t.shape[1]):
-                    if update_mask[b, v]:
-                        k_idx = best_k_idx[b, v]
-                        self.dynamic_values[k_idx, v, :] += self.ema_alpha * current_err[b, v, :]
+            for k in range(self.dynamic_keys.shape[0]):
+                mask_k = (best_k_idx == k) & update_mask # (B, V)
+                if mask_k.any():
+                    for v in range(z_t.shape[1]):
+                        if mask_k[:, v].any():
+                            # 提取命中的样本误差并求平均，然后进行 EMA 更新
+                            mean_err = current_err[mask_k[:, v], v, :].mean(dim=0)
+                            self.dynamic_values[k, v, :] += self.ema_alpha * mean_err
 
         # ==========================================================
-        # 1. 提取安全的 K_all (此时 self.static_keys 天然具备绝对正交性)
+        # 1. 组合基向量用于计算新颖度 (Novelty Check)
         # ==========================================================
+        # static_keys 形状为 (V, N, D)，需要转换为 (N, V, D) 以统一维度
         basis_list = [self.static_keys.permute(1, 0, 2)]
         if self.dynamic_keys.shape[0] > 0:
+            # dynamic_keys 已经是 (K, V, D)
             basis_list.append(F.normalize(self.dynamic_keys, p=2, dim=-1))
-        K_all = torch.cat(basis_list, dim=0) # (T, V, D)
-
-        # ==========================================================
-        # 2. 实时生成绝对正交基 (Strict Orthonormalization)
-        # 防护浮点漂移导致 max_energy > 1.0 的终极保险
-        # ==========================================================
-        Q_list = []
-        for t in range(K_all.shape[0]):
-            v = K_all[t].clone() 
-            for q in Q_list:
-                overlap = torch.einsum('vd, vd -> v', v, q).unsqueeze(-1) 
-                v = v - overlap * q
-            
-            norm = torch.norm(v, p=2, dim=-1, keepdim=True)
-            v = torch.where(norm > 1e-5, v / norm, torch.zeros_like(v))
-            Q_list.append(v)
-            
-        K_ortho = torch.stack(Q_list, dim=0) # (T, V, D)
-
-        # ==========================================================
-        # 3. 计算投影和正交残差
-        # ==========================================================
-        coeffs = torch.einsum('bvd, tvd -> btv', z_t, K_ortho)
-        proj = torch.einsum('btv, tvd -> bvd', coeffs, K_ortho)
-        r_ortho = z_t - proj
         
-        energy = torch.norm(r_ortho, p=2, dim=-1)
+        K_all = torch.cat(basis_list, dim=0) # (T, V, D), 其中 T = N + K
 
         # ==========================================================
-        # 4. Hard Mining + 新增模式
+        # 2. 计算最大相似度并转化为“新颖度能量” (Novelty Energy)
+        # [核心修复] 彻底抛弃导致度量爆炸的投影计算，改用距离度量
         # ==========================================================
-        max_energy_per_sample = energy.mean(dim=1) 
+        # 计算当前查询 z_t 与所有已知原型 (静态+动态) 的余弦相似度
+        # z_t: (B, V, D), K_all: (T, V, D) -> sim_all: (B, V, T)
+        sim_all = torch.einsum('bvd, tvd -> bvt', z_t, K_all)
+        
+        # 找到与现有所有知识最接近的匹配度
+        max_sim, _ = sim_all.max(dim=-1) # (B, V)
+        
+        # 定义能量 (新颖度) = 1.0 - 最大相似度
+        # 这种计算方式确保 energy 的绝对值域被严格限制在 [0.0, 2.0] 之间，绝不会爆炸
+        energy = 1.0 - max_sim # (B, V)
+
+        # ==========================================================
+        # 3. Hard Mining + 新增模式
+        # ==========================================================
+        max_energy_per_sample = energy.mean(dim=1) # (B,)
         best_sample_idx = torch.argmax(max_energy_per_sample)
         max_energy = max_energy_per_sample[best_sample_idx]
 
+        # 注意：这里的 energy_threshold 语义已变为 "允许的最大不相似度距离"
+        # 建议在初始化时将 self.energy_threshold 设置为 0.2 或 0.3 (意味着当 max_sim < 0.8 甚至 0.7 时才触发)
         if max_energy > self.energy_threshold:
-            print(f"[PKA_OnLine] New Pattern Triggered! Max energy: {max_energy.item():.4f}")
+            print(f"[PKA_OnLine] New Pattern Triggered! Max novelty energy: {max_energy.item():.4f}")
             
-            raw_new_key = r_ortho[best_sample_idx] 
-            new_value = current_err[best_sample_idx] 
+            # [修复] 直接保存真实的、未被扭曲的查询向量 z_t
+            new_key = F.normalize(z_t[best_sample_idx], p=2, dim=-1) # (V, D)
+            new_value = current_err[best_sample_idx] # (V, H)
 
-            # 二次正交化 (使用绝对正交的 K_ortho)
-            for t in range(K_ortho.shape[0]):
-                basis_v = K_ortho[t] 
-                overlap = torch.einsum('vd, vd -> v', raw_new_key, basis_v).unsqueeze(-1)
-                raw_new_key = raw_new_key - overlap * basis_v
-                
-            new_key = F.normalize(raw_new_key, p=2, dim=-1) 
+            # 新增节点的初始使用次数计数
             new_count = torch.tensor([5.0], device=z_t.device)
 
+            # 追加新模式
             self.dynamic_keys = torch.cat([self.dynamic_keys, new_key.unsqueeze(0)], dim=0)
             self.dynamic_values = torch.cat([self.dynamic_values, new_value.unsqueeze(0)], dim=0)
             self.dynamic_counts = torch.cat([self.dynamic_counts, new_count], dim=0)
 
+            # 容量管理淘汰机制 (LFU 变体)
             if self.dynamic_keys.shape[0] > self.max_capacity:
                 min_idx = torch.argmin(self.dynamic_counts)
                 keep_mask = torch.ones(self.dynamic_keys.shape[0], dtype=torch.bool, device=z_t.device)
@@ -833,4 +829,6 @@ class PKA_LDict(nn.Module):
                 self.dynamic_keys = self.dynamic_keys[keep_mask]
                 self.dynamic_values = self.dynamic_values[keep_mask]
                 self.dynamic_counts = self.dynamic_counts[keep_mask]
+                
+                # 防止 count 的相对差异过大，每次淘汰后平移重置基线
                 self.dynamic_counts = self.dynamic_counts - self.dynamic_counts.min()
