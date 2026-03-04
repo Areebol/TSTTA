@@ -292,7 +292,7 @@ class Adapter(nn.Module):
             batch_idx_available = min(self.pred_step_end_dict.keys())
             inputs_history = self.inputs_dict.pop(batch_idx_available)
 
-            with torch.no_grad(): # 在线更新通常不需要梯度 (除了 Static Fine-tune)
+            for _ in range(self.cfg.TTA.PKA.STEPS):
                 self.n_adapt += 1
 
                 if self.cali.input_calibration is not None:
@@ -309,25 +309,31 @@ class Adapter(nn.Module):
                         pred_final, z_t = self.cali.output_calibration(pred_base, enc_history)
 
                         # =========================================================
-                        # [关键修改] OD-TTA v3.3 在线更新流程 
+                        # 在线更新流程 
                         # =========================================================
                         if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-                            # Step 4.1: Update Bias (Always Run) 
-                            # 使用 Y_base 误差更新 Bias 更稳健 
-                            # self.cali.out_cali.update_bias(ground_truth, y_base_pred=pred_base)
-                            
                             # Step 4.2: Update Dynamic Memory (Conditional) 
                             # 基于 Y_final 的剩余误差来决定是否新增
                             add_pattern_flag = self.cali.out_cali.update_dynamic_memory(
                                 z_t=z_t, 
                                 y_gt=ground_truth, 
-                                y_final_pred=pred_final,
-                                # threshold=self.cfg.TTA.PKA.ENERGY_THRESHOLD
+                                y_final_pred=pred_final
                             )
 
                             if add_pattern_flag:
                                 print(f"[Online Update] Added new pattern. Total patterns now: {self.cali.out_cali.dynamic_keys.shape[0]}")
-                                self.optimizer = get_optimizer(self.manager.get_trainable_parameters(), self.cfg.TTA)
+                                trainable_params = self.manager.configure_adaptation(self.cfg.TTA.MODULE_NAMES_TO_ADAPT)
+                                self.optimizer = get_optimizer(trainable_params, self.cfg.TTA)
+                                
+                            # Gradient Descent Backprop
+                            if isinstance(self.loss_fn, CoBA_Loss):
+                                loss = self.loss_fn(pred_final, ground_truth, bases=self.cali.out_cali.dynamic_keys)
+                            else:
+                                loss = self.loss_fn(pred_final, ground_truth)
+                            
+                            self.optimizer.zero_grad()
+                            loss.backward()
+                            self.optimizer.step()
                                 
                     else:
                         pred_final = self.cali.output_calibration(pred_base)
@@ -358,17 +364,19 @@ class Adapter(nn.Module):
                     pred_base_partial = pred_base[:, :period, :]
                     pred_final_partial = pred_final[:, :period, :]
                     ground_truth_partial = ground_truth[:, :period, :]
-                    z_t_partial = z_t # Query 是一样的，它是基于 Input 的
 
                     # =========================================================
                     # 在线更新流程
                     # =========================================================
-                    # if self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
-                    #     # Update Bias Only
-                    #     self.cali.out_cali.update_bias(
-                    #         ground_truth_partial, 
-                    #         y_base_pred=pred_base_partial
-                    #     )
+                    # compute loss
+                    if isinstance(self.loss_fn, CoBA_Loss):
+                        loss = self.loss_fn(pred_final_partial, ground_truth_partial, bases=self.cali.out_cali.dynamic_keys)
+                    else:
+                        loss = self.loss_fn(pred_final_partial, ground_truth_partial)
+
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
 
                 else:
                     pred_final = self.cali.output_calibration(pred_base)

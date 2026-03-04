@@ -748,7 +748,7 @@ class PKA_LDict(nn.Module):
         add_pattern_flag = False
         current_len = y_gt.shape[1]
         if current_len < self.window_len:
-            return
+            return add_pattern_flag
 
         # 计算当前残差误差 (B, V, H)
         current_err = (y_gt - y_final_pred).permute(0, 2, 1) 
