@@ -15,7 +15,7 @@ from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_d
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
-from tta.pattern_bank import PKA_GCM
+from tta.pattern_bank import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
@@ -46,6 +46,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'lowrank-coba-GCM': CoBA_low_rank_GCM,
         'identity': IdentityAdapter,
         'PKA_GCM': PKA_GCM, 
+        'PKA_LDict': PKA_LDict,
     }
     if model_type == 'CoBA_GCM':
         coba_params = {
@@ -58,6 +59,18 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'energy_threshold': cfg.TTA.PKA.ENERGY_THRESHOLD,
             'query_type': cfg.TTA.PKA.QUERY_TYPE,
             'seq_len': seq_len,
+        }
+        params.update(coba_params)
+    elif model_type in ['PKA_LDict']:
+        coba_params = {
+            'n_static': cfg.TTA.PKA.N_PATTERNS,
+            'energy_threshold': cfg.TTA.PKA.ENERGY_THRESHOLD,
+            'query_type': cfg.TTA.PKA.QUERY_TYPE,
+            'seq_len': seq_len,
+            'bias_momentum': cfg.TTA.PKA.BIAS_MOMENTUM,
+            'max_dynamic_capacity': cfg.TTA.PKA.MAX_DYNAMIC_CAPACITY,
+            'temperature': cfg.TTA.PKA.TEMPERATURE,
+            'feature_dim': cfg.TTA.PKA.GCM_FEA_DIM,
         }
         params.update(coba_params)
     elif model_type in ['lowrank-coba-GCM']:
@@ -161,6 +174,17 @@ class Adapter(nn.Module):
             parts.append("coba-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+
+        elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("pka-ldict-offline")
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
+        elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
+            parts.append("pka-ldict-online")
+            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
+            # parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
+            
         else:
             parts.append("coba-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
@@ -178,7 +202,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, PKA_GCM)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, PKA_GCM, PKA_LDict)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.PKA.COBA_ONLINE_ENABLED # Enable online mode after pre-training
         
@@ -198,7 +222,7 @@ class Adapter(nn.Module):
                 
                 # output correction
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, PKA_GCM):
+                    if isinstance(self.cali.out_cali, (PKA_GCM, PKA_LDict)):
                         pred, z_t = self.cali.output_calibration(pred, inputs=enc_window_all)
                     else:
                         pred = self.cali.output_calibration(pred)

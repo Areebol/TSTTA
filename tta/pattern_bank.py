@@ -688,7 +688,8 @@ class PKA_LDict(nn.Module):
         # ==========================================
         # 1. 静态检索 (使用 Softmax 保持离线一致性)
         # ==========================================
-        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, self.static_keys)
+        static_keys = F.normalize(self.static_keys, p=2, dim=-1)
+        sim_static = torch.einsum('bvd, vnd -> bvn', z_t, static_keys)
         w_static = F.softmax(self.temperature * sim_static, dim=-1)
         delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
         delta_static = delta_static.permute(0, 2, 1)
