@@ -668,8 +668,8 @@ class PKA_LDict(nn.Module):
         nn.init.zeros_(self.static_values)
 
         # --- 2. Dynamic Memory (Online) ---
-        self.register_buffer('dynamic_keys', torch.empty(0, n_var, self.feature_dim))
-        self.register_buffer('dynamic_values', torch.empty(0, n_var, self.window_len))
+        self.dynamic_keys = nn.Parameter(torch.empty(0, n_var, self.feature_dim))
+        self.dynamic_values = nn.Parameter(torch.empty(0, n_var, self.window_len))
         self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))
 
         # --- 3. Global Bias (Online) ---
@@ -745,6 +745,7 @@ class PKA_LDict(nn.Module):
             raise ValueError(f"Length {current_len} exceeds bias length {full_len}.")
 
     def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
+        add_pattern_flag = False
         current_len = y_gt.shape[1]
         if current_len < self.window_len:
             return
@@ -807,6 +808,7 @@ class PKA_LDict(nn.Module):
         # 注意：这里的 energy_threshold 语义已变为 "允许的最大不相似度距离"
         # 建议在初始化时将 self.energy_threshold 设置为 0.2 或 0.3 (意味着当 max_sim < 0.8 甚至 0.7 时才触发)
         if max_energy > self.energy_threshold:
+            add_pattern_flag = True
             print(f"[PKA_OnLine] New Pattern Triggered! Max novelty energy: {max_energy.item():.4f}")
             
             # [修复] 直接保存真实的、未被扭曲的查询向量 z_t
@@ -817,8 +819,13 @@ class PKA_LDict(nn.Module):
             new_count = torch.tensor([5.0], device=z_t.device)
 
             # 追加新模式
-            self.dynamic_keys = torch.cat([self.dynamic_keys, new_key.unsqueeze(0)], dim=0)
-            self.dynamic_values = torch.cat([self.dynamic_values, new_value.unsqueeze(0)], dim=0)
+            # Re-wrap as Parameter to allow gradient updates
+            new_keys_data = torch.cat([self.dynamic_keys.data, new_key.unsqueeze(0)], dim=0)
+            new_values_data = torch.cat([self.dynamic_values.data, new_value.unsqueeze(0)], dim=0)
+            
+            self.dynamic_keys = nn.Parameter(new_keys_data)
+            self.dynamic_values = nn.Parameter(new_values_data)
+
             self.dynamic_counts = torch.cat([self.dynamic_counts, new_count], dim=0)
 
             # 容量管理淘汰机制 (LFU 变体)
@@ -827,9 +834,11 @@ class PKA_LDict(nn.Module):
                 keep_mask = torch.ones(self.dynamic_keys.shape[0], dtype=torch.bool, device=z_t.device)
                 keep_mask[min_idx] = False
                 
-                self.dynamic_keys = self.dynamic_keys[keep_mask]
-                self.dynamic_values = self.dynamic_values[keep_mask]
+                self.dynamic_keys = nn.Parameter(self.dynamic_keys.data[keep_mask])
+                self.dynamic_values = nn.Parameter(self.dynamic_values.data[keep_mask])
                 self.dynamic_counts = self.dynamic_counts[keep_mask]
                 
                 # 防止 count 的相对差异过大，每次淘汰后平移重置基线
                 self.dynamic_counts = self.dynamic_counts - self.dynamic_counts.min()
+        
+        return add_pattern_flag

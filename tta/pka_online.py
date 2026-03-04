@@ -318,12 +318,17 @@ class Adapter(nn.Module):
                             
                             # Step 4.2: Update Dynamic Memory (Conditional) 
                             # 基于 Y_final 的剩余误差来决定是否新增
-                            self.cali.out_cali.update_dynamic_memory(
+                            add_pattern_flag = self.cali.out_cali.update_dynamic_memory(
                                 z_t=z_t, 
                                 y_gt=ground_truth, 
                                 y_final_pred=pred_final,
                                 # threshold=self.cfg.TTA.PKA.ENERGY_THRESHOLD
                             )
+
+                            if add_pattern_flag:
+                                print(f"[Online Update] Added new pattern. Total patterns now: {self.cali.out_cali.dynamic_keys.shape[0]}")
+                                self.optimizer = get_optimizer(self.manager.get_trainable_parameters(), self.cfg.TTA)
+                                
                     else:
                         pred_final = self.cali.output_calibration(pred_base)
                 
