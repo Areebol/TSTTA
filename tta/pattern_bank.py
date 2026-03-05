@@ -672,9 +672,6 @@ class PKA_LDict(nn.Module):
         self.dynamic_values = nn.Parameter(torch.empty(0, n_var, self.window_len))
         self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))
 
-        # --- 3. Global Bias (Online) ---
-        self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
-
     def _get_query(self, x, y_base):
         query_input = torch.cat([x, y_base], dim=1) 
         query = self.query_net(query_input) # (B, V, D)
@@ -683,7 +680,7 @@ class PKA_LDict(nn.Module):
 
     def forward(self, y_base, x=None):
         batch_size = y_base.shape[0]
-        z_t = self._get_query(x, y_base) 
+        z_t = self._get_query(x, y_base)
 
         # ==========================================
         # 1. 静态检索 (使用 Softmax 保持离线一致性)
@@ -724,25 +721,9 @@ class PKA_LDict(nn.Module):
         # ==========================================
         # 3. 最终融合
         # ==========================================
-        y_final = y_base + self.global_bias + delta_static + delta_dynamic
+        y_final = y_base + delta_static + delta_dynamic
         
         return y_final, z_t
-
-    def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
-        if y_base_pred is not None:
-            residual = y_gt - y_base_pred
-        else:
-            residual = y_gt - y_final_pred
-            
-        current_bias_shift = residual.mean(dim=0)
-        current_len = current_bias_shift.shape[0]
-        full_len = self.global_bias.shape[0]
-
-        if current_len <= full_len:
-            self.global_bias[:current_len] = (1 - self.alpha) * self.global_bias[:current_len] + \
-                                             self.alpha * current_bias_shift
-        else:
-            raise ValueError(f"Length {current_len} exceeds bias length {full_len}.")
 
     def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
         add_pattern_flag = False
@@ -752,25 +733,6 @@ class PKA_LDict(nn.Module):
 
         # 计算当前残差误差 (B, V, H)
         current_err = (y_gt - y_final_pred).permute(0, 2, 1) 
-        
-        # ==========================================================
-        # 0. 增量学习阶段 (EMA Finetuning)
-        # [修复] 批量防重叠求均值，防止同一个 batch 多次重复累加同一个 Key
-        # ==========================================================
-        if self.dynamic_keys.shape[0] > 0:
-            # sim_dynamic: (B, V, K)
-            sim_dynamic = torch.einsum('bvd, kvd -> bvk', z_t, self.dynamic_keys)
-            max_sim, best_k_idx = torch.max(sim_dynamic, dim=-1) 
-            update_mask = max_sim > self.sim_threshold 
-            
-            for k in range(self.dynamic_keys.shape[0]):
-                mask_k = (best_k_idx == k) & update_mask # (B, V)
-                if mask_k.any():
-                    for v in range(z_t.shape[1]):
-                        if mask_k[:, v].any():
-                            # 提取命中的样本误差并求平均，然后进行 EMA 更新
-                            mean_err = current_err[mask_k[:, v], v, :].mean(dim=0)
-                            self.dynamic_values[k, v, :] += self.ema_alpha * mean_err
 
         # ==========================================================
         # 1. 组合基向量用于计算新颖度 (Novelty Check)
@@ -811,7 +773,7 @@ class PKA_LDict(nn.Module):
             add_pattern_flag = True
             print(f"[PKA_OnLine] New Pattern Triggered! Max novelty energy: {max_energy.item():.4f}")
             
-            # [修复] 直接保存真实的、未被扭曲的查询向量 z_t
+            # 直接保存真实的、未被扭曲的查询向量 z_t
             new_key = F.normalize(z_t[best_sample_idx], p=2, dim=-1) # (V, D)
             new_value = current_err[best_sample_idx] # (V, H)
 

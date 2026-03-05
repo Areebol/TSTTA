@@ -326,14 +326,15 @@ class Adapter(nn.Module):
                                 self.optimizer = get_optimizer(trainable_params, self.cfg.TTA)
                                 
                             # Gradient Descent Backprop
-                            if isinstance(self.loss_fn, CoBA_Loss):
-                                loss = self.loss_fn(pred_final, ground_truth, bases=self.cali.out_cali.dynamic_keys)
-                            else:
-                                loss = self.loss_fn(pred_final, ground_truth)
-                            
-                            self.optimizer.zero_grad()
-                            loss.backward()
-                            self.optimizer.step()
+                            if hasattr(self.cali.out_cali, 'dynamic_keys') and self.cali.out_cali.dynamic_keys.shape[0] > 0:
+                                if isinstance(self.loss_fn, CoBA_Loss):
+                                    loss = self.loss_fn(pred_final, ground_truth, bases=self.cali.out_cali.dynamic_keys)
+                                else:
+                                    loss = self.loss_fn(pred_final, ground_truth)
+                                
+                                self.optimizer.zero_grad()
+                                loss.backward()
+                                self.optimizer.step()
                                 
                     else:
                         pred_final = self.cali.output_calibration(pred_base)
@@ -365,18 +366,16 @@ class Adapter(nn.Module):
                     pred_final_partial = pred_final[:, :period, :]
                     ground_truth_partial = ground_truth[:, :period, :]
 
-                    # =========================================================
                     # 在线更新流程
-                    # =========================================================
-                    # compute loss
-                    if isinstance(self.loss_fn, CoBA_Loss):
-                        loss = self.loss_fn(pred_final_partial, ground_truth_partial, bases=self.cali.out_cali.dynamic_keys)
-                    else:
-                        loss = self.loss_fn(pred_final_partial, ground_truth_partial)
+                    if hasattr(self.cali.out_cali, 'dynamic_keys') and self.cali.out_cali.dynamic_keys.shape[0] > 0:
+                        if isinstance(self.loss_fn, CoBA_Loss):
+                            loss = self.loss_fn(pred_final_partial, ground_truth_partial, bases=self.cali.out_cali.dynamic_keys)
+                        else:
+                            loss = self.loss_fn(pred_final_partial, ground_truth_partial)
 
-                    self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
+                        self.optimizer.zero_grad()
+                        loss.backward()
+                        self.optimizer.step()
 
                 else:
                     pred_final = self.cali.output_calibration(pred_base)
