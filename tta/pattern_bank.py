@@ -632,7 +632,7 @@ class PKA_LDict(nn.Module):
     def __init__(self, window_len, n_var=1, seq_len=96, 
                  n_static=16, feature_dim=32, temperature=10.0,
                  bias_momentum=0.1, energy_threshold=0.1, max_dynamic_capacity=16, 
-                 sim_threshold=0.8, ema_alpha=0.1, **kwargs):
+                 sim_threshold=0.9, ema_alpha=0.1, **kwargs):
         """
         OD-TTA v3.4 (Fixed): Bias-Augmented Orthogonal Prototype Memory
         包含 Global Bias (粗调) + Static Memory (离线精调, 稳定基底) + Dynamic Memory (独立路由, 在线长尾)
@@ -702,6 +702,7 @@ class PKA_LDict(nn.Module):
             # 使用带阈值的线性截断 (Thresholded Gating) 替代 Softmax
             # 如果相似度 <= threshold，权重为 0；如果相似度为 1.0，权重为 1.0
             w_dynamic = torch.clamp((sim_dynamic - self.sim_threshold) / (1.0 - self.sim_threshold + 1e-5), min=0.0)
+            # w_dynamic = sim_dynamic
 
             # 更新使用计数
             if self.training or True: 
@@ -725,14 +726,15 @@ class PKA_LDict(nn.Module):
         
         return y_final, z_t
 
-    def update_dynamic_memory(self, z_t, y_gt, y_final_pred):
+    def update_dynamic_memory(self, z_t, y_gt, y_base, y_final_pred):
         add_pattern_flag = False
         current_len = y_gt.shape[1]
         if current_len < self.window_len:
             return add_pattern_flag
 
         # 计算当前残差误差 (B, V, H)
-        current_err = (y_gt - y_final_pred).permute(0, 2, 1) 
+        # current_err = (y_gt - y_final_pred).permute(0, 2, 1) 
+        current_err = (y_gt - y_base).permute(0, 2, 1) 
 
         # ==========================================================
         # 1. 组合基向量用于计算新颖度 (Novelty Check)
@@ -784,6 +786,7 @@ class PKA_LDict(nn.Module):
             # Re-wrap as Parameter to allow gradient updates
             new_keys_data = torch.cat([self.dynamic_keys.data, new_key.unsqueeze(0)], dim=0)
             new_values_data = torch.cat([self.dynamic_values.data, new_value.unsqueeze(0)], dim=0)
+            # new_values_data = torch.cat([self.dynamic_values.data, torch.zeros_like(new_value.unsqueeze(0))], dim=0)
             
             self.dynamic_keys = nn.Parameter(new_keys_data)
             self.dynamic_values = nn.Parameter(new_values_data)

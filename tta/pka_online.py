@@ -193,7 +193,7 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
             parts.append("pka-ldict-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            # parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+            parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
             parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
         
         
@@ -317,6 +317,7 @@ class Adapter(nn.Module):
                             add_pattern_flag = self.cali.out_cali.update_dynamic_memory(
                                 z_t=z_t, 
                                 y_gt=ground_truth, 
+                                y_base=pred_base,
                                 y_final_pred=pred_final
                             )
 
