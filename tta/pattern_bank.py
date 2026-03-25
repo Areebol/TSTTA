@@ -701,7 +701,8 @@ class PKA_LDict(nn.Module):
             
             # 使用带阈值的线性截断 (Thresholded Gating) 替代 Softmax
             # 如果相似度 <= threshold，权重为 0；如果相似度为 1.0，权重为 1.0
-            w_dynamic = torch.clamp((sim_dynamic - self.sim_threshold) / (1.0 - self.sim_threshold + 1e-5), min=0.0)
+            # w_dynamic = torch.clamp((sim_dynamic - self.sim_threshold) / (1.0 - self.sim_threshold + 1e-5), min=0.0)
+            w_dynamic = torch.relu((sim_dynamic - self.sim_threshold), min=0.0)
             # w_dynamic = sim_dynamic
 
             # 更新使用计数

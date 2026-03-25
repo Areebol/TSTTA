@@ -64,7 +64,7 @@ class Trainer:
             self.optimizer_stat = optim.construct_optimizer(self.norm_module, self.cfg.SAN)
 
     def train(self):
-        if self.cfg.MODEL.NAME == 'OLS':
+        if self.cfg.MODEL.NAME in ['OLS', 'OLSPCD']:
             self.model.fit_ols_solutions(self.train_loader)
             self.save_best_model()
             return
