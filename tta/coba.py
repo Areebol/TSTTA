@@ -15,7 +15,6 @@ from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_d
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
-from tta.tta_dual_utils.GCM import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device

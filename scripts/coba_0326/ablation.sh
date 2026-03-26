@@ -1,42 +1,36 @@
 #!/bin/bash
-NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+# NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=1               # Parallel jobs per NPU
+PER_NPU=4               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 MODELS=("DLinear")
-DATASETS=("ETTm2")
-TARGETS=("ETTm1")
+
+# 固定迁移对: Source:Target
+PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
+# PAIRS=("ETTm2:ETTm1")
+# PAIRS=("ETTm2:ETTm1" "ETTh1:ETTh2")
+PAIRS=("ETTh2:ETTh1")
+
 PRED_LENS=(96 192 336 720)
-PRED_LENS=(336)
+# PRED_LENS=(720)
+BASE_NUMS=(2 4 8 16 32 64 128 256)
 
-# BASE_NUMS=(4 8 16 32 64)
-BASE_NUMS=(16)
-
-# LRS=(0.5 0.3 0.1 0.08)
-
-# LRS=(0.001)
-# LRS=(0.01 0.005 0.003 0.001 0.0005 0.0001)
-# LRS=(1e-2 5e-3 1e-3 1e-4 5e-5 1e-5)
-# LRS=(1e-5 1e-6)
 # LRS=(1e-1 5e-2 3e-2 1e-2)
-# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3 5e-4 1e-4 5e-5)
-LRS=(0.001 0.0001)
-# LRS=(1e-2 1e-3 1e-4 1e-5)
-# LRS=(0.1 0.05 0.03 0.01)
-# LRS=(0.05 0.03 0.01)
-# LRS=(0.03)
-# LAMBDA_ORTHO=(1e1 1e0 1e-1 1e-2 1e-3 1e-4)
+# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+# LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
+# LRS=(0.01)
+LRS=(0.03)
+SEEDS=(0 1 2 3 4)
+
 LAMBDA_ORTHO=(1e-2)
-# QUERY_TYPES=("freq-separate-CI" "freq-mag-phase")
 QUERY_TYPES=("freq-base-CI")
-# QUERY_TYPES=("freq-norm-CI")
 
 parallel --lb -j ${TOTAL_JOBS} '
   npu_array=($NPU_STR)
@@ -47,20 +41,27 @@ parallel --lb -j ${TOTAL_JOBS} '
   
   # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
   export CUDA_VISIBLE_DEVICES=${NPU_ID}
-  SEED=0
 
   MODEL={1}
-  DATASET={2}
+  
+  # Parse Dataset Pair
+  PAIR={2}
+  DATASET=$(echo $PAIR | cut -d: -f1)
+  TARGET=$(echo $PAIR | cut -d: -f2)
+
   PRED_LEN={3}
-  TARGET={4}
-  LR={5}
-  LAMBDA_ORTHO={6}
-  N_BASES={7}
-  QUERY_TYPE={8}
+  LR={4}
+  LAMBDA_ORTHO={5}
+  N_BASES={6}
+  QUERY_TYPE={7}
+  SEED={8}
+
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/output_tta/"
   mkdir -p "${RESULT_DIR}"
+  
+  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | LR: ${LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
 
   python main.py \
     SEED ${SEED} \
@@ -74,14 +75,14 @@ parallel --lb -j ${TOTAL_JOBS} '
     TEST.ENABLE False \
     TTA.ENABLE True \
     TTA.DOMAIN_SHIFT True \
-    TTA.METHOD 'Dual-tta' \
+    TTA.METHOD 'COBA' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
     TTA.SOLVER.BASE_LR ${LR} \
-    TTA.DUAL.PRETRAIN_EPOCHS 2 \
+    TTA.DUAL.PRETRAIN_EPOCHS 5 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
-    TTA.DUAL.CALI_NAME CoBA_FreqDomain_ElementWise_GCM \
+    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_Norm \
     TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \
@@ -93,4 +94,4 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${TARGETS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}"
+' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}"
