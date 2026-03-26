@@ -294,16 +294,18 @@ class Adapter(nn.Module):
     
     def _pretrain_adapter(self):
         self._switch_model_to_train()
-        total_epochs = self.cfg.TTA.DUAL.PRETRAIN_EPOCHS
-        
-        for epoch in range(total_epochs):
-            # 余弦退火更新温度系数 tau
-            if self.cali.output_calibration is not None and hasattr(self.cali.out_cali, 'step_tau'):
-                self.cali.out_cali.step_tau(current_step=epoch, total_steps=total_epochs)
-                # 监控温度衰减情况
-                print(f"[Epoch {epoch}/{total_epochs}] CoBA_Freq_Adapter Current Tau: {self.cali.out_cali.current_tau:.4f}")
-                
-            for inputs in self.tta_train_loader:
+        total_steps = self.cfg.TTA.DUAL.PRETRAIN_EPOCHS * len(self.tta_train_loader)
+
+        for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
+            
+            for step, inputs in enumerate(self.tta_train_loader):
+                # 余弦退火更新温度系数 tau
+                if self.cali.output_calibration is not None and hasattr(self.cali.out_cali, 'step_tau'):
+                    current_step = epoch * len(self.tta_train_loader) + step + 1
+                    self.cali.out_cali.step_tau(current_step=current_step, total_steps=total_steps)
+                    # 监控温度衰减情况
+                    print(f"[Epoch {current_step}/{total_steps}] CoBA_Freq_Adapter Current Tau: {self.cali.out_cali.current_tau:.4f}")
+
                 enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
                 inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
                 
@@ -402,6 +404,8 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
                 elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
                     loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
+                elif isinstance(self.loss_fn, DiversityCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
 
@@ -436,6 +440,8 @@ class Adapter(nn.Module):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
             elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
+            elif isinstance(self.loss_fn, DiversityCoBALoss):
+                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
             self.optimizer.zero_grad()

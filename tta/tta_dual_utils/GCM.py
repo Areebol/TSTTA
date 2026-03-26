@@ -2229,9 +2229,9 @@ class CoBA_Freq_Adapter(nn.Module):
         self._init_bases()
         
         if self.eved_enable:
-            self.query_len = self.freq_len + window_len // 2 
+            self.query_len = window_len + window_len // 2 
         else:
-            self.query_len = self.freq_len + self.seq_len // 2 
+            self.query_len = self.window_len + self.seq_len
 
         # --- Query Net Selection Logic (Factory) ---
         print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
