@@ -565,3 +565,100 @@ class FreqElementWiseSPLoss(nn.Module):
         l_ortho = self.ortho_loss(bases_r, bases_i)
         
         return l_task + self.lambda_ortho * l_ortho
+
+class CosineDiversityLoss(nn.Module):
+    def __init__(self, margin=0.0):
+        super().__init__()
+        # 如果使用 margin，相似度低于 margin 的模式将不再产生惩罚梯度
+        self.margin = margin
+
+    def forward(self, embeddings):
+        """
+        Calculates a soft cosine diversity loss to push distinct patterns apart.
+        
+        Args:
+            embeddings shape: (N_bases, Feature_dim, N_var) or (N_bases, Feature_dim)
+        """
+        if embeddings.ndim == 2:
+            embeddings = embeddings.unsqueeze(-1)
+            
+        N, F_len, V = embeddings.shape
+        
+        # 如果只有一个模式，不存在多样性问题
+        if N <= 1:
+            return torch.tensor(0.0, device=embeddings.device)
+            
+        # 1. 沿特征维度进行 L2 归一化 (N, F, V)
+        emb_norm = F.normalize(embeddings, p=2, dim=1)
+        
+        # 2. 计算各变量独立的分组 Gram 矩阵 (Cosine Similarity)
+        # G[i, j, v] 表示第 v 个变量下，第 i 个和第 j 个模式的余弦相似度
+        # 维度: (N, N, V)
+        sim_matrix = torch.einsum('ifv, jfv -> ijv', emb_norm, emb_norm)
+        
+        # 3. 构造非对角线掩码 (只惩罚不同模式之间的相似度)
+        # identity: (N, N, 1)
+        identity = torch.eye(N, device=embeddings.device).unsqueeze(-1)
+        mask = 1.0 - identity
+        
+        # 4. 提取非对角线元素的绝对值相似度（或平方相似度）
+        # 这里使用平方相似度 (sim^2)，使得相似度越大，推开的惩罚力度呈二次方增长
+        off_diag_sim = (sim_matrix ** 2) * mask
+        
+        # 如果设置了 margin，可以使用 ReLU 进行截断，例如 F.relu(torch.abs(sim_matrix) - self.margin)
+        if self.margin > 0:
+            off_diag_sim = F.relu(torch.abs(sim_matrix) - self.margin) ** 2 * mask
+            
+        # 5. 计算平均多样性损失
+        # 共有 N * (N - 1) * V 个非对角线元素
+        loss = off_diag_sim.sum() / (N * (N - 1) * V)
+        
+        return loss
+
+class DiversityCoBALoss(nn.Module):
+    """
+    Revised Loss function for Test-Time Adaptation.
+    Combines task loss (e.g., MSE) with Soft Cosine Diversity constraints 
+    on both the Keys (query matching) and Bases (frequency calibration).
+    """
+    def __init__(self, lambda_bases=0, lambda_keys=1.0, margin=0.0, task_loss_fn=None):
+        super().__init__()
+        self.task_loss_fn = task_loss_fn if task_loss_fn else StandardMSELoss()
+        self.diversity_loss_fn = CosineDiversityLoss(margin=margin)
+        
+        # 允许对 Keys 和 Bases 设置不同的惩罚权重
+        self.lambda_bases = lambda_bases
+        self.lambda_keys = lambda_keys
+ 
+    def forward(self, pred, ground_truth, bases_r, bases_i, keys):
+        """
+        Args:
+            pred: Model predictions
+            ground_truth: Target values
+            bases_r: Real part of bases, expected shape (N_bases, Freq_len, N_var)
+            bases_i: Imaginary part of bases, expected shape (N_bases, Freq_len, N_var)
+            keys: Query codebook keys, expected shape (N_var, N_bases, Feature_dim) 
+                  from CoBA_Freq_Adapter.
+        """
+        
+        # 1. 基础预测误差 (Task Loss)
+        l_task = self.task_loss_fn(pred, ground_truth)
+        if torch.isnan(l_task):
+            raise ValueError("NaN detected in task loss")
+            
+        # 2. Bases 多样性约束 (合并实部和虚部作为完整的频域特征向量)
+        # 合并后形状: (N_bases, 2 * Freq_len, N_var)
+        bases = torch.cat([bases_r, bases_i], dim=1)  
+        l_div_bases = self.diversity_loss_fn(bases)
+        
+        # 3. Keys 多样性约束
+        # 传入的 keys 形状通常是 (N_var, N_bases, Feature_dim)
+        # 我们的 DiversityLoss 需要的输入格式是 (N_bases, Feature_dim, N_var)
+        # 所以使用 permute 进行维度对齐: (1, 2, 0)
+        keys_reshaped = keys.permute(1, 2, 0)
+        l_div_keys = self.diversity_loss_fn(keys_reshaped)
+        
+        # 4. 汇总总体 Loss
+        l_total = l_task + (self.lambda_bases * l_div_bases) + (self.lambda_keys * l_div_keys)
+        
+        return l_total

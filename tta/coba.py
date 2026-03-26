@@ -104,6 +104,8 @@ def build_loss_fn(cfg) -> nn.Module:
         return FreqElementWiseCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     elif loss_name == "Freq-EW-SPLoss":
         return FreqElementWiseSPLoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
+    elif loss_name == "DiversityCoBALoss":
+        return DiversityCoBALoss(lambda_bases=cfg.TTA.DUAL.LAMBDA_BASES, lambda_keys=cfg.TTA.DUAL.LAMBDA_KEYS, margin=cfg.TTA.DUAL.DIVERSITY_MARGIN)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -326,6 +328,12 @@ class Adapter(nn.Module):
                     loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
                 elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
                     loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
+                elif isinstance(self.loss_fn, DiversityCoBALoss):
+                    loss = self.loss_fn(pred, ground_truth, 
+                        bases_r=self.cali.out_cali.bases_r, 
+                        bases_i=self.cali.out_cali.bases_i,
+                        keys=self.cali.out_cali.codebook_keys
+                    )
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
                 # print(loss)
