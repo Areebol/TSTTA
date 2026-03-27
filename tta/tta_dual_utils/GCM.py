@@ -2214,6 +2214,10 @@ class CoBA_Freq_Adapter(nn.Module):
         # 初始化为最小 tau，保证不经任何调度时，测试行为是 sharp 的
         self.current_tau = self.min_tau 
 
+        if self.feature_dim <= n_bases:
+            print(f"Warning: feature_dim ({self.feature_dim}) should be greater than n_bases ({self.n_bases}) for better retrieval performance.")
+            self.feature_dim = n_bases + 1
+
         # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
         self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
         
@@ -2259,21 +2263,37 @@ class CoBA_Freq_Adapter(nn.Module):
         self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
         self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
 
+    # def _init_bases(self):
+    #     """
+    #     使用 Kaiming 初始化代替正交初始化，保证模式差异
+    #     """
+    #     with torch.no_grad():
+    #         if self.var_wise:
+    #             for v in range(self.n_var):
+    #                 joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+    #                 nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+    #                 bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+    #                 self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+    #                 self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+    #         else:
+    #             joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+    #             nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+    #             bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+    #             self.bases_r.data.copy_(bases_r_chunk * self.scale)
+    #             self.bases_i.data.copy_(bases_i_chunk * self.scale)
+
     def _init_bases(self):
-        """
-        使用 Kaiming 初始化代替正交初始化，保证模式差异
-        """
         with torch.no_grad():
             if self.var_wise:
                 for v in range(self.n_var):
                     joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
-                    nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+                    nn.init.orthogonal_(joint_bases)
                     bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
                     self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
                     self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
             else:
                 joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
-                nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+                nn.init.orthogonal_(joint_bases)
                 bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
                 self.bases_r.data.copy_(bases_r_chunk * self.scale)
                 self.bases_i.data.copy_(bases_i_chunk * self.scale)

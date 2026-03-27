@@ -1,5 +1,6 @@
 #!/bin/bash
-NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+# NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -13,9 +14,11 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(720)
 
+MODELS=("DLinear" "PatchTST")
+DATASETS=("ETTm2")
 # MODELS=("FreTS")
 # DATASETS=("ETTm1")
-# TARGETS=("ETTm2")
+TARGETS=("ETTm2")
 # DATASETS=("ETTm1")
 # PRED_LENS=(192)
 LRS=(0.001)
@@ -38,8 +41,8 @@ parallel --lb -j ${TOTAL_JOBS} '
 
     echo "Job {%}: MODEL={1} DATASET={2} PRED={3} LR={4} -> Running on NPU $NPU_ID"
     
-    # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
-    export CUDA_VISIBLE_DEVICES=${NPU_ID}
+    export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+    # export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
         SEED ${SEED} \
@@ -49,7 +52,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         MODEL.pred_len {3} \
         TRAIN.ENABLE False \
         TRAIN.CHECKPOINT_DIR checkpoints/{1}/{2}_{3}/ \
-        TEST.ENABLE False \
+        TEST.ENABLE True \
         TTA.ENABLE True \
         TTA.DOMAIN_SHIFT False \
         TTA.SOLVER.BASE_LR ${BASE_LR} \

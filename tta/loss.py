@@ -621,14 +621,14 @@ class DiversityCoBALoss(nn.Module):
     Combines task loss (e.g., MSE) with Soft Cosine Diversity constraints 
     on both the Keys (query matching) and Bases (frequency calibration).
     """
-    def __init__(self, lambda_bases=0, lambda_keys=1.0, margin=0.0, task_loss_fn=None):
+    def __init__(self, lambda_base=0, lambda_key=1.0, margin=0.0, task_loss_fn=None):
         super().__init__()
         self.task_loss_fn = task_loss_fn if task_loss_fn else StandardMSELoss()
         self.diversity_loss_fn = CosineDiversityLoss(margin=margin)
         
         # 允许对 Keys 和 Bases 设置不同的惩罚权重
-        self.lambda_bases = lambda_bases
-        self.lambda_keys = lambda_keys
+        self.lambda_base = lambda_base
+        self.lambda_key = lambda_key
  
     def forward(self, pred, ground_truth, bases_r, bases_i, keys):
         """
@@ -659,6 +659,6 @@ class DiversityCoBALoss(nn.Module):
         l_div_keys = self.diversity_loss_fn(keys_reshaped)
         
         # 4. 汇总总体 Loss
-        l_total = l_task + (self.lambda_bases * l_div_bases) + (self.lambda_keys * l_div_keys)
+        l_total = l_task + (self.lambda_base * l_div_bases) + (self.lambda_key * l_div_keys)
         
         return l_total

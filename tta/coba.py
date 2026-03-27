@@ -105,7 +105,7 @@ def build_loss_fn(cfg) -> nn.Module:
     elif loss_name == "Freq-EW-SPLoss":
         return FreqElementWiseSPLoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     elif loss_name == "DiversityCoBALoss":
-        return DiversityCoBALoss(lambda_bases=cfg.TTA.DUAL.LAMBDA_BASES, lambda_keys=cfg.TTA.DUAL.LAMBDA_KEYS, margin=cfg.TTA.DUAL.DIVERSITY_MARGIN)
+        return DiversityCoBALoss(lambda_base=cfg.TTA.DUAL.LAMBDA_BASE, lambda_key=cfg.TTA.DUAL.LAMBDA_KEY, margin=cfg.TTA.DUAL.DIVERSITY_MARGIN)
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
@@ -177,12 +177,15 @@ class Adapter(nn.Module):
             parts.append("coba-feq-adapter-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+            parts.append(f"lambda-k-{self.cfg.TTA.DUAL.LAMBDA_KEY}")
         elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_Freq_Adapter' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("coba-feq-adapter-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+            parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+            # parts.append(f"lambda-k-{self.cfg.TTA.DUAL.LAMBDA_KEY}")
 
-        if self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-norm-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
@@ -299,12 +302,12 @@ class Adapter(nn.Module):
         for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
             
             for step, inputs in enumerate(self.tta_train_loader):
-                # 余弦退火更新温度系数 tau
-                if self.cali.output_calibration is not None and hasattr(self.cali.out_cali, 'step_tau'):
-                    current_step = epoch * len(self.tta_train_loader) + step + 1
-                    self.cali.out_cali.step_tau(current_step=current_step, total_steps=total_steps)
-                    # 监控温度衰减情况
-                    print(f"[Epoch {current_step}/{total_steps}] CoBA_Freq_Adapter Current Tau: {self.cali.out_cali.current_tau:.4f}")
+                # # 余弦退火更新温度系数 tau
+                # if self.cali.output_calibration is not None and hasattr(self.cali.out_cali, 'step_tau'):
+                #     current_step = epoch * len(self.tta_train_loader) + step + 1
+                #     self.cali.out_cali.step_tau(current_step=current_step, total_steps=total_steps)
+                #     # 监控温度衰减情况
+                #     print(f"[Epoch {current_step}/{total_steps}] CoBA_Freq_Adapter Current Tau: {self.cali.out_cali.current_tau:.4f}")
 
                 enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
                 inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
@@ -480,6 +483,7 @@ class Adapter(nn.Module):
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
+            save_dir=self.cfg.RESULT_DIR
         )
         self.model.eval()
 
@@ -629,3 +633,11 @@ class Adapter(nn.Module):
 def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
+
+
+def visualize_bases_interpretation(cali_module, pred_len):
+    if not hasattr(cali_module, 'analyzer'):
+        print("No analyzer found in calibration module for visualization.")
+        return
+    analyzer = cali_module.analyzer
+    analyzer.visualize(pred_len)
