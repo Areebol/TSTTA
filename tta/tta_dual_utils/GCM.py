@@ -2420,7 +2420,7 @@ class CoBA_Freq_Adapter(nn.Module):
 
 
 
-class CoBA_Freq_Adapter(nn.Module): 
+class Freq_Add_Adapter(nn.Module): 
     """
     Final Master Version: Zero-Centered Additive Patching 
     
@@ -2433,7 +2433,7 @@ class CoBA_Freq_Adapter(nn.Module):
                  gating_init=0.01, var_wise=True,
                  n_bases=8, feature_dim=32, query_type='freq-base-CI', seq_len=96, eved_enable=False, 
                  tau_min=0.1, tau_max=2.0, **kwargs):
-        super(CoBA_Freq_Adapter, self).__init__()
+        super(Freq_Add_Adapter, self).__init__()
         self.window_len = window_len
         self.n_var = n_var
         self.var_wise = var_wise

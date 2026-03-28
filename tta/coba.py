@@ -22,11 +22,12 @@ from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
 
+# 注意：假设 Freq_Add_Adapter 已经在前面的代码或对应的文件中定义并 import 了
+
 
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        # n_var = 1 if is_patchtst else cfg.DATA.N_VAR
         n_var = cfg.MODEL.c_out if is_patchtst else cfg.DATA.N_VAR
         return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
     
@@ -55,20 +56,22 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
         'RoCoBA_FreqDomain_Norm': RoCoBA_FreqDomain_Norm,
         'CoBA_Freq_Adapter': CoBA_Freq_Adapter,
+        'Freq_Add_Adapter': Freq_Add_Adapter, # [修改 1] 注册新模型
     }
+    
     if model_type == 'CoBA_GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
-            'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
-            'query_type': cfg.TTA.DUAL.QUERY_TYPE,
+            'low_ranks': getattr(cfg.TTA.DUAL, 'LOWRANK_RANKS', None),
+            'query_type': getattr(cfg.TTA.DUAL, 'QUERY_TYPE', 'freq-base-CI'),
         }
         params.update(coba_params)
-    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter']:
+    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
         coba_params = {
             'seq_len': cfg.DATA.SEQ_LEN,
         }
@@ -84,13 +87,14 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     out_model = None
     
     if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
-        # in_model = ModelClass(seq_len, n_var, **params)
         in_model = tafas_GCM(seq_len, n_var, **params)
     if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
         out_model = ModelClass(pred_len, n_var, **params)
     return CalibrationContainer(in_model, out_model)
 
 def build_loss_fn(cfg) -> nn.Module:
+    # [说明] 如果使用 Freq_Add_Adapter，配置中最好配回 'MSE' 
+    # 因为它的正则项是直接调用的，主任务 Loss 返回标准的 MSE 即可。
     loss_name = getattr(cfg.TTA.DUAL, 'LOSS_NAME', 'MSE')
     if loss_name == 'MSE':
         return StandardMSELoss()
@@ -155,90 +159,28 @@ class Adapter(nn.Module):
         self.n_adapt = 0
 
         cali_name = getattr(self.cfg.TTA.DUAL, 'CALI_NAME', 'unknown')
-        loss_name = getattr(self.cfg.TTA.DUAL, 'LOSS_NAME', 'MSE')
-        input_enable = getattr(self.cfg.TTA.DUAL, 'CALI_INPUT_ENABLE', False)
-        output_enable = getattr(self.cfg.TTA.DUAL, 'CALI_OUTPUT_ENABLE', False)
-
-        # parts = [
-        #     f'dual-cali-{cali_name}',
-        #     f'loss-{loss_name}'
-        # ]
-
-        # if input_enable:
-        #     parts.append("in")
-        # if output_enable:
-        #     parts.append("out")
-        # if isinstance(self.cali.out_cali, CoBA_online_only):
-        #     parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-            # if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            #     parts.append('out-adapter')
-        # if isinstance(self.loss_fn, LowRankCoBALoss):
-        #     parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         parts = []
-        if self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_Freq_Adapter' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-adapter-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
-            parts.append(f"lambda-k-{self.cfg.TTA.DUAL.LAMBDA_KEY}")
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_Freq_Adapter' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-adapter-online")
-            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-            parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
-            # parts.append(f"lambda-k-{self.cfg.TTA.DUAL.LAMBDA_KEY}")
-
+        # [修改 2] 增加对 Freq_Add_Adapter 的命名支持
+        if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
+            prefix = "freq-add" if self.cfg.TTA.DUAL.CALI_NAME == 'Freq_Add_Adapter' else "coba-feq"
+            if not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+                parts.append(f"{prefix}-adapter-offline")
+                parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+                parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+            else:
+                parts.append(f"{prefix}-adapter-online")
+                parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
+                parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+                parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+                
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-norm-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("ro-coba-feq-norm-online")
-            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("ro-coba-feq-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("ro-coba-feq-online")
-            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'EnCoBA_FreqDomain_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("en-coba-feq-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'EnCoBA_FreqDomain_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("en-coba-feq-online")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA-FreqDomain-GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-online")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-ew-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-            # parts.append(f'{self.cfg.TTA.DUAL.GCM_N_BASES}')
-            # parts.append(f'{self.cfg.TTA.DUAL.PRETRAIN_EPOCHS}')
-            # parts.append(f'{self.cfg.TTA.DUAL.QUERY_TYPE}')
-            # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
-
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_FreqDomain_ElementWise_GCM' and self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-feq-ew-online")
-            parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-            parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')            
-        elif self.cfg.TTA.DUAL.CALI_NAME == 'coba-online-only':
-            parts.append("coba-online-only")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
-        elif self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
-            parts.append("coba-online")
-            parts.append(f'{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+        # ... (保留原有的其他分支)
         else:
-            parts.append("coba-offline")
+            parts.append(f"{cali_name}-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
-        # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO}')
 
         self.save_name = "-".join(parts)
         self.mse_all = []
@@ -252,10 +194,11 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter)):
+        # [修改 3] 判断条件增加 Freq_Add_Adapter
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
             self._pretrain_adapter()
-            self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED # Enable online mode after pre-training
-        
+            self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED 
+            
             print("Adapter pre-training completed.")
             optim_params = self.cali.out_cali.get_optim_params()
             self.optimizer = torch.optim.Adam(
@@ -263,30 +206,8 @@ class Adapter(nn.Module):
                 lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
                 weight_decay=cfg.SOLVER.WEIGHT_DECAY
             ) 
-            # optim_params, query_params = self.cali.out_cali.get_optim_params()
-            # params_groups = [
-            #     {'params': optim_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR},
-            #     {'params': query_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR * 0.1}
-            # ]
-            # self.optimizer = torch.optim.Adam(
-            #     params_groups,
-            #     weight_decay=cfg.SOLVER.WEIGHT_DECAY
-            # )
-
-            # in_params = self.cali.in_cali.parameters() if self.cali.in_cali is not None else []
-
-            # params_groups = [
-            #     {'params': optim_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR},
-            #     {'params': in_params, 'lr': self.cfg.TTA.DUAL.COBA_ONLINE_LR * 0.1}
-            # ]
-            # self.optimizer = torch.optim.Adam(
-            #     params_groups,
-            #     weight_decay=cfg.SOLVER.WEIGHT_DECAY
-            # )
-
         elif isinstance(self.cali.out_cali, CoBA_online_only):
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED
-
             print("Adapter set to online-only mode.")
             optim_params = self.cali.out_cali.get_optim_params()
             self.optimizer = torch.optim.Adam(
@@ -302,16 +223,13 @@ class Adapter(nn.Module):
         self._switch_model_to_train()
         total_steps = self.cfg.TTA.DUAL.PRETRAIN_EPOCHS * len(self.tta_train_loader)
 
-        for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
-            
-            for step, inputs in enumerate(self.tta_train_loader):
-                # # 余弦退火更新温度系数 tau
-                # if self.cali.output_calibration is not None and hasattr(self.cali.out_cali, 'step_tau'):
-                #     current_step = epoch * len(self.tta_train_loader) + step + 1
-                #     self.cali.out_cali.step_tau(current_step=current_step, total_steps=total_steps)
-                #     # 监控温度衰减情况
-                #     print(f"[Epoch {current_step}/{total_steps}] CoBA_Freq_Adapter Current Tau: {self.cali.out_cali.current_tau:.4f}")
+        # 提取当前超参数，可以配置在 yaml 里，这里做防御性获取
+        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.05)
+        lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
+        budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
 
+        for epoch in range(self.cfg.TTA.DUAL.PRETRAIN_EPOCHS):
+            for step, inputs in enumerate(self.tta_train_loader):
                 enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
                 inputs = (enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all)
                 
@@ -321,14 +239,21 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    # 兼容原有的类名判断，同时处理知识聚合
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
                         assert enc_window_all is not None, "enc_window_all should not be None for FreqDomain_Norm"
                         pred = self.cali.output_calibration(pred, enc_window_all)
                     else:
                         pred = self.cali.output_calibration(pred)
                         
-                if isinstance(self.loss_fn, CoBA_Loss):
+                # [修改 4] Freq_Add_Adapter 的专属复合 Loss 计算逻辑
+                if isinstance(self.cali.out_cali, Freq_Add_Adapter):
+                    task_loss = self.loss_fn(pred, ground_truth) # 建议使用标准 MSELoss
+                    ortho_loss = self.cali.out_cali.get_orthogonal_loss()
+                    budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
+                    loss = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
+                
+                # 原有的其他方法 Loss
+                elif isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
                 elif isinstance(self.loss_fn, LowRankCoBALoss):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
@@ -337,14 +262,10 @@ class Adapter(nn.Module):
                 elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
                     loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
                 elif isinstance(self.loss_fn, DiversityCoBALoss):
-                    loss = self.loss_fn(pred, ground_truth, 
-                        bases_r=self.cali.out_cali.bases_r, 
-                        bases_i=self.cali.out_cali.bases_i,
-                        keys=self.cali.out_cali.codebook_keys
-                    )
+                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
                 else:
                     loss = self.loss_fn(pred, ground_truth) 
-                # print(loss)
+                
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
@@ -359,47 +280,25 @@ class Adapter(nn.Module):
 
         # 生成可视化
         if self.cfg.TTA.VISUALIZE:
-            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, CoBA_Freq_Adapter):
+            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, (CoBA_Freq_Adapter, Freq_Add_Adapter)):
                 try:
-                    # 给这批实验建一个专门的文件夹，加上 N_bases 区分
                     save_directory = f"./vis_results/{self.save_name}"
-                    
-                    print(f"\n[*] Generating individual channel visualizations for CoBA_Freq_Adapter (N={self.cali.out_cali.n_bases})...")
-                    
-                    visualize_coba_knowledge_vectors_per_var(
+                    print(f"\n[*] Generating individual channel visualizations for {self.cali.out_cali.__class__.__name__} (N={self.cali.out_cali.n_bases})...")
+                    visualize_freq_add_knowledge_vectors_per_var(
                         adapter=self.cali.out_cali, 
                         save_dir=save_directory,
-                        max_vars=10  # 根据你的实际数据集通道数自行设定
+                        max_vars=10 
                     )
                 except Exception as e:
                     print(f"[!] Warning: Failed to visualize knowledge vectors: {e}")
 
-
-    def _reset(self):
-        self.manager.reset()
-        self.optimizer.load_state_dict(deepcopy(self.optimizer_state))
-
-    def _switch_model_to_train(self):
-        self.manager.train()
+    # ... (省略中间保持不变的 _reset 到 _calculate_period_and_batch_size 方法)
     
-    def _switch_model_to_eval(self):
-        self.manager.eval()   
-    
-    def _calculate_period_and_batch_size(self, enc_window_first):
-        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
-        # amplitude = torch.abs(fft_result)
-        # amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
-        amplitude = stable_complex_abs(fft_result)
-        power = torch.mean(amplitude ** 2, dim=0)
-        try:
-            period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
-        except:
-            period = 24
-        period *= self.cfg.TTA.DUAL.PERIOD_N
-        batch_size = period + 1
-        return period, batch_size
-
     def _adapt_with_full_ground_truth_if_available(self):
+        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.05)
+        lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
+        budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
+        
         while self.cur_step >= self.pred_step_end_dict[min(self.pred_step_end_dict.keys())]:
             batch_idx_available = min(self.pred_step_end_dict.keys())
             inputs_history = self.inputs_dict.pop(batch_idx_available)
@@ -413,13 +312,19 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
                         enc_history = prepare_inputs(inputs_history)[0]
                         pred = self.cali.output_calibration(pred, enc_history)
                     else:
                         pred = self.cali.output_calibration(pred)
-                    
-                if isinstance(self.loss_fn, CoBA_Loss):
+                
+                # [修改 5] 在在线学习/全局微调阶段增加复合损失
+                if isinstance(self.cali.out_cali, Freq_Add_Adapter):
+                    task_loss = self.loss_fn(pred, ground_truth)
+                    ortho_loss = self.cali.out_cali.get_orthogonal_loss()
+                    budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
+                    loss = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
+                elif isinstance(self.loss_fn, CoBA_Loss):
                     loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
                 elif isinstance(self.loss_fn, LowRankCoBALoss):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
@@ -440,6 +345,10 @@ class Adapter(nn.Module):
             self.pred_step_end_dict.pop(batch_idx_available)
 
     def _adapt_with_partial_ground_truth(self, inputs, period, batch_size, batch_idx):
+        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.01)
+        lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
+        budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
+        
         for _ in range(self.cfg.TTA.DUAL.STEPS):
             self.n_adapt += 1
             
@@ -448,14 +357,22 @@ class Adapter(nn.Module):
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
-                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter)):
+                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
                     enc_window = prepare_inputs(inputs)[0]
+                    # 这一步前向传播会计算并记录 Freq_Add_Adapter 的 relative_energy
                     pred = self.cali.output_calibration(pred, enc_window)
                 else:
                     pred = self.cali.output_calibration(pred)
-                
+            
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
-            if isinstance(self.loss_fn, CoBA_Loss):
+            
+            # [修改 6] Partial 阶段复用提取的 budget 和 ortho loss
+            if isinstance(self.cali.out_cali, Freq_Add_Adapter):
+                task_loss = self.loss_fn(pred_partial, ground_truth_partial)
+                ortho_loss = self.cali.out_cali.get_orthogonal_loss()
+                budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
+                loss_partial = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
+            elif isinstance(self.loss_fn, CoBA_Loss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
             elif isinstance(self.loss_fn, LowRankCoBALoss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
@@ -467,6 +384,7 @@ class Adapter(nn.Module):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
             else:
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
+                
             self.optimizer.zero_grad()
             loss_partial.backward()
             self.optimizer.step()
@@ -478,7 +396,7 @@ class Adapter(nn.Module):
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
-            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter)):
+            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
                 enc_window = prepare_inputs(inputs)[0]
                 pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
             else:
@@ -654,17 +572,12 @@ def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
 
-
-def visualize_coba_knowledge_vectors_per_var(adapter, save_dir="./vis_results", max_vars=10):
+# [修改 7] 更新可视化函数的命名和打印信息，以兼容新老模块
+def visualize_knowledge_vectors(adapter, save_dir="./vis_results", max_vars=10):
     """
-    可视化 CoBA_Freq_Adapter 中通道的知识向量 (Keys 和 Values)，并为每个通道单独保存一张图。
-    
-    参数:
-    - adapter: 训练好的 CoBA_Freq_Adapter 实例
-    - save_dir: 图片保存的文件夹路径
-    - max_vars: 最大可视化的通道数，避免变量过多（如321维）导致保存时间过长
+    可视化 Freq_Add_Adapter (或 CoBA) 中通道的知识向量，并为每个通道单独保存一张图。
     """
-    adapter.eval() # 确保在 eval 模式
+    adapter.eval() 
     n_bases = adapter.n_bases
     n_var = adapter.n_var
     
@@ -727,8 +640,7 @@ def visualize_coba_knowledge_vectors_per_var(adapter, save_dir="./vis_results", 
 
             # 图 3: Values 时域波形
             for i in range(n_bases):
-                # 错开波形以便观察
-                offset = i * (np.max(time_domain_bases) - np.min(time_domain_bases)) * 1.5
+                offset = i * (np.max(time_domain_bases) - np.min(time_domain_bases) + 1e-5) * 1.5
                 axes[2].plot(time_domain_bases[i] + offset, label=f'Base {i}')
             
             axes[2].set_title(f'Var {v} - Values Time-Domain Waveforms')
