@@ -209,6 +209,7 @@ if __name__ == "__main__":
     build_summary_table(
         # input_dir="./results/", 
         input_dir="./results/base_num_ablation", 
+        # input_dir="./results/lambda_k_ablation",
         output_csv="./results/final_tta_summary.csv", 
         # output_csv="/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125/final_tta_summary.csv",
         

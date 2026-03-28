@@ -23,7 +23,7 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTm2")
 
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(720)
+PRED_LENS=(720)
 # BASE_NUMS=(1 2 4 8 16 32 64 128 256)
 
 BASE_NUMS=(16)
@@ -31,16 +31,16 @@ BASE_NUMS=(16)
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
-# LRS=(0.01)
+LRS=(0.0001)
 # LRS=(0.001 0.005 0.01 0.05 0.1)
 # LRS=(0.0001 0.0005)
-LRS=(0.0001)
+# LRS=(0.0001)
 # SEEDS=(0 1 2 3 4)
-SEEDS=(0 1 2)
-# SEEDS=(0)
+# SEEDS=(0 1 2)
+SEEDS=(0)
 
-# LAMBDA_KEYS=(1.0)
-LAMBDA_KEYS=(0.0001 0.001 0.01 0.1 1.0 10.0 100.0)
+LAMBDA_KEYS=(1.0)
+# LAMBDA_KEYS=(0.0001 0.001 0.01 0.1 1.0 10.0 100.0)
 QUERY_TYPES=("freq-base-CI")
 
 parallel --lb -j ${TOTAL_JOBS} '
@@ -50,8 +50,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
   NPU_ID=${npu_array[$slot_idx]}
   
-  # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
-  export CUDA_VISIBLE_DEVICES=${NPU_ID}
+  export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  # export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
   MODEL={1}
   DATASET={2}
@@ -65,7 +65,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/lambda_k_ablation/"
+  RESULT_DIR="./results/debugs/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} | Len: ${PRED_LEN} | LR: ${LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
@@ -97,7 +97,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.CALI_OUTPUT_ENABLE True \
     TTA.DUAL.COBA_ONLINE_ENABLED False \
-    TTA.VISUALIZE False \
+    TTA.VISUALIZE True \
     RESULT_DIR ${RESULT_DIR}
 
 ' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_KEYS[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}"

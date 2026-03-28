@@ -1,6 +1,6 @@
 #!/bin/bash
 # NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -29,9 +29,9 @@ BASE_NUMS=(1 2 4 8 16 32 64 128 256)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
 # LRS=(0.01)
-LRS=(0.03)
-SEEDS=(0 1 2 3 4)
-# SEEDS=(0)
+LRS=(0.0001)
+# SEEDS=(0 1 2 3 4)
+SEEDS=(0 1 2)
 
 LAMBDA_ORTHO=(1e-2)
 QUERY_TYPES=("freq-base-CI")
@@ -43,8 +43,8 @@ parallel --lb -j ${TOTAL_JOBS} '
   slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
   NPU_ID=${npu_array[$slot_idx]}
   
-  # export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
-  export CUDA_VISIBLE_DEVICES=${NPU_ID}
+  export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
+  # export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
   MODEL={1}
   
@@ -62,7 +62,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/lambda_k_ablation/"
+  RESULT_DIR="./results/base_num_ablation/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | LR: ${LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"

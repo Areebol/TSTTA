@@ -1,6 +1,6 @@
 #!/bin/bash
 # NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
-NPUS=(2 3)          # Available NPU IDs
+NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -8,34 +8,40 @@ TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
 export NPU_STR
-export NNPU
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 MODELS=("DLinear")
 
 # 固定迁移对: Source:Target
-PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1" )
+# PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1" )
 # PAIRS=("ETTm2:ETTm1")
 # PAIRS=("ETTm2:ETTm1" "ETTh1:ETTh2")
 # PAIRS=("ETTh2:ETTh1")
 # PAIRS=("ETTm2:ETTm2")
-PAIRS=("ETTm2:ETTm1")
+# PAIRS=("ETTh1:ETTh2" "ETTm1:ETTm2" "ETTm2:ETTm1" )
+DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
+DATASETS=("exchange_rate")
 
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(720)
 BASE_NUMS=(1 2 4 8 16 32 64 128 256)
-# BASE_NUMS=(32 64 128 256)
+
+# BASE_NUMS=(16)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
-# LRS=(0.01)
 OFFLINE_LRS=(0.03)
 ONLINE_LRS=(0.01)
+# LRS=(0.001 0.005 0.01 0.05 0.1)
+# LRS=(0.0001 0.0005)
+# LRS=(0.0001)
+# SEEDS=(0 1 2 3 4)
 SEEDS=(0 1 2)
-SEEDS=(0)
+# SEEDS=(0)
 
-LAMBDA_ORTHO=(1e-2)
+LAMBDA_KEYS=(1.0)
+# LAMBDA_KEYS=(0.0001 0.001 0.01 0.1 1.0 10.0 100.0)
 QUERY_TYPES=("freq-base-CI")
 
 parallel --lb -j ${TOTAL_JOBS} '
@@ -49,15 +55,11 @@ parallel --lb -j ${TOTAL_JOBS} '
   # export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
   MODEL={1}
-  
-  # Parse Dataset Pair
-  PAIR={2}
-  DATASET=$(echo $PAIR | cut -d: -f1)
-  TARGET=$(echo $PAIR | cut -d: -f2)
+  DATASET={2}
 
   PRED_LEN={3}
   OFFLINE_LR={4}
-  LAMBDA_ORTHO={5}
+  LAMBDA_KEY={5}
   N_BASES={6}
   QUERY_TYPE={7}
   SEED={8}
@@ -68,20 +70,19 @@ parallel --lb -j ${TOTAL_JOBS} '
   RESULT_DIR="./results/base_num_ablation/"
   mkdir -p "${RESULT_DIR}"
   
-  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | OFFLINE_LR: ${OFFLINE_LR} | ONLINE_LR: ${ONLINE_LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
+  echo "Running experiment: ${MODEL} | ${DATASET} | Len: ${PRED_LEN} | OFFLINE_LR: ${OFFLINE_LR} | ONLINE_LR: ${ONLINE_LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
 
   python main.py \
     SEED ${SEED} \
     DATA.NAME ${DATASET} \
     DATA.PRED_LEN ${PRED_LEN} \
-    DATA.DOMAIN_SHIFT_TARGET ${TARGET} \
     MODEL.NAME ${MODEL} \
     MODEL.pred_len ${PRED_LEN} \
     TRAIN.ENABLE False \
     TRAIN.CHECKPOINT_DIR ${CHECKPOINT_DIR} \
     TEST.ENABLE False \
     TTA.ENABLE True \
-    TTA.DOMAIN_SHIFT True \
+    TTA.DOMAIN_SHIFT False \
     TTA.METHOD 'COBA' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
@@ -93,7 +94,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.DUAL.LOSS_NAME DiversityCoBALoss \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \
-    TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
+    TTA.DUAL.LAMBDA_KEY ${LAMBDA_KEY} \
     TTA.DUAL.COBA_ONLINE_LR ${ONLINE_LR} \
     TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.CALI_OUTPUT_ENABLE True \
@@ -101,4 +102,4 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}" ::: "${ONLINE_LRS[@]}"
+' ::: "${MODELS[@]}" ::: "${DATASETS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_KEYS[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}" ::: "${ONLINE_LRS[@]}"

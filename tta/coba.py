@@ -3,6 +3,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
 
 from copy import deepcopy
 from typing import List, Optional
@@ -353,7 +356,24 @@ class Adapter(nn.Module):
                 self.cali.out_cali.analyzer.end_epoch()
                 
         self._switch_model_to_eval()
-        # visualize_bases_interpretation(self.cali.out_cali, self.cfg.DATA.PRED_LEN)
+
+        # 生成可视化
+        if self.cfg.TTA.VISUALIZE:
+            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, CoBA_Freq_Adapter):
+                try:
+                    # 给这批实验建一个专门的文件夹，加上 N_bases 区分
+                    save_directory = f"./vis_results/{self.save_name}"
+                    
+                    print(f"\n[*] Generating individual channel visualizations for CoBA_Freq_Adapter (N={self.cali.out_cali.n_bases})...")
+                    
+                    visualize_coba_knowledge_vectors_per_var(
+                        adapter=self.cali.out_cali, 
+                        save_dir=save_directory,
+                        max_vars=10  # 根据你的实际数据集通道数自行设定
+                    )
+                except Exception as e:
+                    print(f"[!] Warning: Failed to visualize knowledge vectors: {e}")
+
 
     def _reset(self):
         self.manager.reset()
@@ -635,9 +655,95 @@ def build_adapter(cfg, model, norm_module=None):
     return adapter
 
 
-def visualize_bases_interpretation(cali_module, pred_len):
-    if not hasattr(cali_module, 'analyzer'):
-        print("No analyzer found in calibration module for visualization.")
-        return
-    analyzer = cali_module.analyzer
-    analyzer.visualize(pred_len)
+def visualize_coba_knowledge_vectors_per_var(adapter, save_dir="./vis_results", max_vars=10):
+    """
+    可视化 CoBA_Freq_Adapter 中通道的知识向量 (Keys 和 Values)，并为每个通道单独保存一张图。
+    
+    参数:
+    - adapter: 训练好的 CoBA_Freq_Adapter 实例
+    - save_dir: 图片保存的文件夹路径
+    - max_vars: 最大可视化的通道数，避免变量过多（如321维）导致保存时间过长
+    """
+    adapter.eval() # 确保在 eval 模式
+    n_bases = adapter.n_bases
+    n_var = adapter.n_var
+    
+    plot_vars = min(n_var, max_vars)
+    if n_var > max_vars:
+        print(f"[*] Warning: n_var ({n_var}) is large. Only plotting the first {max_vars} variables.")
+
+    # 确保保存目录存在
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+
+    with torch.no_grad():
+        for v in range(plot_vars):
+            # ==========================================
+            # 1. Keys (k) 相似度矩阵
+            # ==========================================
+            keys = adapter.codebook_keys[v] # (n_bases, feature_dim)
+            keys_norm = F.normalize(keys, p=2, dim=-1)
+            sim_matrix_k = torch.matmul(keys_norm, keys_norm.T).cpu().numpy()
+
+            # ==========================================
+            # 2. Values (v) 频域相似度矩阵
+            # ==========================================
+            if adapter.var_wise:
+                b_r = adapter.bases_r[:, :, v] # (n_bases, freq_len)
+                b_i = adapter.bases_i[:, :, v]
+            else:
+                b_r = adapter.bases_r
+                b_i = adapter.bases_i
+                
+            complex_bases = torch.complex(b_r, b_i)
+            mag = stable_complex_abs(complex_bases)
+            mag_norm = F.normalize(mag, p=2, dim=-1)
+            sim_matrix_v = torch.matmul(mag_norm, mag_norm.T).cpu().numpy()
+
+            # ==========================================
+            # 3. Values (v) 转换回时域波形
+            # ==========================================
+            time_domain_bases = torch.fft.irfft(complex_bases, n=adapter.window_len, dim=-1).cpu().numpy()
+
+            # ==========================================
+            # 开始为当前变量 v 单独创建画布和绘图
+            # ==========================================
+            fig, axes = plt.subplots(1, 3, figsize=(20, 5))
+            fig.suptitle(f'Knowledge Vectors Analysis - Var {v} (N_bases: {n_bases})', fontsize=16)
+
+            # 图 1: Keys
+            sns.heatmap(sim_matrix_k, ax=axes[0], cmap='coolwarm', vmin=-1, vmax=1, 
+                        annot=False, fmt=".2f", square=True)
+            axes[0].set_title(f'Var {v} - Keys Cosine Similarity')
+            axes[0].set_xlabel('Base Index')
+            axes[0].set_ylabel('Base Index')
+
+            # 图 2: Values 频域
+            sns.heatmap(sim_matrix_v, ax=axes[1], cmap='viridis', vmin=-1, vmax=1, 
+                        annot=False, fmt=".2f", square=True)
+            axes[1].set_title(f'Var {v} - Values (Freq Mag) Similarity')
+            axes[1].set_xlabel('Base Index')
+            axes[1].set_ylabel('Base Index')
+
+            # 图 3: Values 时域波形
+            for i in range(n_bases):
+                # 错开波形以便观察
+                offset = i * (np.max(time_domain_bases) - np.min(time_domain_bases)) * 1.5
+                axes[2].plot(time_domain_bases[i] + offset, label=f'Base {i}')
+            
+            axes[2].set_title(f'Var {v} - Values Time-Domain Waveforms')
+            axes[2].set_yticks([]) # 去掉 Y 轴刻度，因为加了 offset
+            axes[2].set_xlabel('Time Step')
+            if n_bases <= 15:
+                axes[2].legend(loc='upper right', bbox_to_anchor=(1.25, 1))
+
+            plt.tight_layout()
+            
+            # 单独保存这张图
+            save_path = os.path.join(save_dir, f"knowledge_vectors_N{n_bases}_var{v}.png")
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            
+            # 非常重要：画完一张图必须 close，否则循环多了会内存溢出
+            plt.close(fig)
+            
+    print(f"[*] Successfully saved {plot_vars} variable visualization images to `{save_dir}/`")
