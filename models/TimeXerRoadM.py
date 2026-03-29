@@ -206,7 +206,13 @@ class Model(nn.Module):
         assert configs.enc_in >= 20, "Encoder input dimensions must be >= 20"
         # exclude = {4, 10, 11, 12, 13, 15}
         # default_road_ids = [i for i in range(20) if i not in exclude]
-        exclude = {24, 25, 26, 27, 28}  # for oVED datasets
+        # exclude = {24, 25, 26, 27, 28}  # for oVED datasets
+
+        if configs.enc_in == 20:
+            exclude = {4, 10, 11, 12, 13, 15}  # for sVED, eVED
+        else:
+            exclude = {24, 25, 26, 27, 28}     # for oVED, oeVED
+
         default_road_ids = [i for i in range(configs.enc_in) if i not in exclude]
         
         self.road_ids = configs.get('road_dims', default_road_ids)

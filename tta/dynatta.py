@@ -398,29 +398,77 @@ class DynaTTAAdapter(nn.Module):
         self.time_stats['total_time'] = time.time() - total_start_time
 
 
-        dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
-        tta_method = f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}'
-        # tta_method = f'TAFAS'
-        save_tta_results(
-            tta_method=tta_method,
-            seed=self.cfg.SEED,
-            model_name=self.cfg.MODEL.NAME,
-            dataset_name=dataset_name,
-            pred_len=self.cfg.DATA.PRED_LEN,
-            mse_after_tta=self.mse_all.mean(),
-            mae_after_tta=self.mae_all.mean(),
-        )
+        # dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+        # tta_method = f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}'
+        # # tta_method = f'TAFAS'
+        # save_tta_results(
+        #     tta_method=tta_method,
+        #     seed=self.cfg.SEED,
+        #     model_name=self.cfg.MODEL.NAME,
+        #     dataset_name=dataset_name,
+        #     pred_len=self.cfg.DATA.PRED_LEN,
+        #     mse_after_tta=self.mse_all.mean(),
+        #     mae_after_tta=self.mae_all.mean(),
+        # )
+
+        # if self.mse_all:
+        #     self.mse_all = np.concatenate(self.mse_all)
+        #     self.mae_all = np.concatenate(self.mae_all)
+
+        #     self._save_results_to_json()
+        #     self.model.eval()
+
+        #     return self.mse_all.mean(), self.mae_all.mean()
+        # else:
+        #     print("No valid test windows for EVED dataset in DynaTTAAdapter.")
+        #     return None, None
 
         if self.mse_all:
+            # 1. 将列表中的多个 array 拼接成一个完整的 Numpy 数组
             self.mse_all = np.concatenate(self.mse_all)
             self.mae_all = np.concatenate(self.mae_all)
 
+            # 2. 计算最终均值
+            final_mse = self.mse_all.mean()
+            final_mae = self.mae_all.mean()
+
+            # 3. 打印结果
+            print('After TSF-TTA of DynaTTA on EVED (per-CSV)')
+            print(f'Test MSE: {final_mse:.4f}, Test MAE: {final_mae:.4f}')
+
+            # 4. 保存到文件
+            dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+            tta_method = f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}'
+            
+            save_tta_results(
+                tta_method=tta_method,
+                seed=self.cfg.SEED,
+                model_name=self.cfg.MODEL.NAME,
+                dataset_name=dataset_name,
+                pred_len=self.cfg.DATA.PRED_LEN,
+                mse_after_tta=final_mse,
+                mae_after_tta=final_mae,
+            )
+
+            # 5. 执行后续保存和状态设置
             self._save_results_to_json()
             self.model.eval()
 
-            return self.mse_all.mean(), self.mae_all.mean()
+            return final_mse, final_mae
         else:
             print("No valid test windows for EVED dataset in DynaTTAAdapter.")
+            
+            # 即使没结果，也要防止报错，保存一个 0 值或者跳过
+            dataset_name = self.cfg.DATA.NAME if not self.cfg.TTA.DOMAIN_SHIFT else f"{self.cfg.DATA.NAME}_2_{self.cfg.DATA.DOMAIN_SHIFT_TARGET}"
+            save_tta_results(
+                tta_method=f'DynaTTA-{self.cfg.TTA.SOLVER.BASE_LR}',
+                seed=self.cfg.SEED,
+                model_name=self.cfg.MODEL.NAME,
+                dataset_name=dataset_name,
+                pred_len=self.cfg.DATA.PRED_LEN,
+                mse_after_tta=0,
+                mae_after_tta=0,
+            )
             return None, None
 
     @torch.no_grad()
@@ -501,7 +549,8 @@ class DynaTTAAdapter(nn.Module):
                 pred, gt = forecast(self.cfg, window_cal, self.model, self.norm_module)
 
                 if hasattr(self, 'cali'):
-                    pred = self.cali.output_calibration(pred, metrics.detach())
+                    # Detach to prevent gradients from flowing through model's patch embedding
+                    pred = self.cali.output_calibration(pred.detach(), metrics.detach())
 
                 pred_p, gt_p = pred[0][:period].clone(), gt[0][:period].clone()
                 loss = F.mse_loss(pred_p, gt_p)
@@ -605,7 +654,7 @@ class DynaTTAAdapter(nn.Module):
         w_tensor = torch.from_numpy(w).to(device).view(-1, 1, 1, 1)
         avg = (stack * w_tensor).sum(0).detach().clone()
         cur = self._extract_embedding(window).detach().to(device)
-        return torch.norm(cur - avg, p=2, dim=-1).mean().item()
+        return torch.norm((cur - avg).float(), p=2, dim=-1).mean().item()
 
     def _dist_rdb(self, window):
         if not self.rdb: return 0.0
@@ -616,7 +665,7 @@ class DynaTTAAdapter(nn.Module):
         stack = torch.stack(embs, 0).to(device)
         avg = (stack * torch.from_numpy(w).to(device).view(-1, 1, 1, 1)).sum(0).detach().clone()
         cur = self._extract_embedding(window).detach().to(device)
-        return torch.norm(cur - avg, p=2, dim=-1).mean().item()
+        return torch.norm((cur - avg).float(), p=2, dim=-1).mean().item()
 
     def _update_adaptation_rate(self, z, dr, dp):
         norms = []
@@ -709,7 +758,10 @@ class DynaTTAAdapter(nn.Module):
 
     def _calc_period(self, enc0):
         fft = torch.fft.rfft(enc0 - enc0.mean(0), dim=0)
-        amp = fft.abs(); pw = amp.pow(2).mean(0)
+        # amp = fft.abs(); pw = amp.pow(2).mean(0)
+        # 手动计算复数模长，加上 1e-8 防止 NPU 下 sqrt(0) 产生 NaN 梯度
+        amp = torch.sqrt(fft.real.pow(2) + fft.imag.pow(2) + 1e-8)
+        pw = amp.pow(2).mean(0)
         try:
             per = enc0.shape[0] // fft[:, pw.argmax()].argmax().item()
         except:
@@ -787,15 +839,17 @@ class DynamicGCM(nn.Module):
 class Calibration(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        seq, pred, n_var = cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, cfg.DATA.N_VAR
+        seq, pred = cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN
+        
+        # 分离输入和输出的真实通道数
+        enc_in = cfg.MODEL.enc_in
+        c_out = cfg.MODEL.c_out
+        
         hd, init, vw = cfg.TTA.TAFAS.HIDDEN_DIM, cfg.TTA.TAFAS.GATING_INIT, cfg.TTA.TAFAS.GCM_VAR_WISE
         dim = 3
-        if cfg.MODEL.NAME == 'PatchTST':
-            self.in_cali = DynamicGCM(seq, 1, hd, init, vw, dim)
-            self.out_cali = DynamicGCM(pred, 1, hd, init, vw, dim)
-        else:
-            self.in_cali = DynamicGCM(seq, n_var, hd, init, vw, dim)
-            self.out_cali = DynamicGCM(pred, n_var, hd, init, vw, dim)
+        
+        self.in_cali = DynamicGCM(seq, enc_in, hd, init, vw, dim)
+        self.out_cali = DynamicGCM(pred, c_out, hd, init, vw, dim)
 
     def input_calibration(self, window, metrics=None):
         x_enc, x_mark, x_dec, d_mark = prepare_inputs(window)

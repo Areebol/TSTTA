@@ -426,7 +426,7 @@ class Adapter(nn.Module):
             for _ in range(self.cfg.TTA.PETSA.STEPS):
                 self.n_adapt += 1
                 self.switch_model_to_train()
-                if self.cfg.TTA.PETSA.CALI_MODULE and self.cfg.MODEL.NAME != 'PatchTST':
+                if self.cfg.TTA.PETSA.CALI_MODULE and 'PatchTST' not in self.cfg.MODEL.NAME:
                     inputs_history = self.cali.input_calibration(inputs_history)
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
 
@@ -461,7 +461,7 @@ class Adapter(nn.Module):
 
     def _adapt_with_partial_ground_truth(self, inputs, period, batch_size, batch_idx):
         self.n_adapt += 1
-        if self.cfg.TTA.PETSA.CALI_MODULE and self.cfg.MODEL.NAME != 'PatchTST':
+        if self.cfg.TTA.PETSA.CALI_MODULE and 'PatchTST' not in self.cfg.MODEL.NAME:
             inputs = self.cali.input_calibration(inputs)
         pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
@@ -550,24 +550,51 @@ class GCM(nn.Module):
 
 
 
+# class Calibration(nn.Module):
+#     def __init__(self, cfg):
+#         super(Calibration, self).__init__()
+#         self.cfg = cfg
+#         self.seq_len = cfg.DATA.SEQ_LEN
+#         self.pred_len = cfg.DATA.PRED_LEN
+#         self.n_var = cfg.DATA.N_VAR
+#         self.hidden_dim = cfg.TTA.PETSA.HIDDEN_DIM
+#         self.gating_init = cfg.TTA.PETSA.GATING_INIT
+#         self.var_wise = cfg.TTA.PETSA.GCM_VAR_WISE
+#         self.low_rank = cfg.TTA.PETSA.RANK
+
+#         if cfg.MODEL.NAME == 'PatchTST':
+#             self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+#             self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+#         else:
+#             self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+#             self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+        
+#     def input_calibration(self, inputs):
+#         enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
+#         enc_window = self.in_cali(enc_window)
+#         return enc_window, enc_window_stamp, dec_window, dec_window_stamp
+
+#     def output_calibration(self, outputs):
+#         return self.out_cali(outputs)
+
 class Calibration(nn.Module):
     def __init__(self, cfg):
         super(Calibration, self).__init__()
         self.cfg = cfg
         self.seq_len = cfg.DATA.SEQ_LEN
         self.pred_len = cfg.DATA.PRED_LEN
-        self.n_var = cfg.DATA.N_VAR
+        
+        # 分离输入和输出的真实通道数
+        self.enc_in = cfg.MODEL.enc_in
+        self.c_out = cfg.MODEL.c_out
+        
         self.hidden_dim = cfg.TTA.PETSA.HIDDEN_DIM
         self.gating_init = cfg.TTA.PETSA.GATING_INIT
         self.var_wise = cfg.TTA.PETSA.GCM_VAR_WISE
         self.low_rank = cfg.TTA.PETSA.RANK
 
-        if cfg.MODEL.NAME == 'PatchTST':
-            self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
-            self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
-        else:
-            self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
-            self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+        self.in_cali = GCM(self.seq_len, self.enc_in, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
+        self.out_cali = GCM(self.pred_len, self.c_out, self.hidden_dim, self.gating_init, self.var_wise, self.low_rank)
         
     def input_calibration(self, inputs):
         enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
@@ -576,3 +603,4 @@ class Calibration(nn.Module):
 
     def output_calibration(self, outputs):
         return self.out_cali(outputs)
+    

@@ -15,6 +15,7 @@ from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_d
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
+from tta.tta_dual_utils.GCM import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
@@ -31,10 +32,6 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         return None
     
     seq_len, pred_len, n_var = get_model_dims(cfg)
-
-    n_var_in = cfg.MODEL.enc_in
-    n_var_out = cfg.MODEL.c_out
-    
     params = {
         'hidden_dim': cfg.TTA.DUAL.HIDDEN_DIM,
         'gating_init': cfg.TTA.DUAL.GATING_INIT,
@@ -67,8 +64,6 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'low_ranks': cfg.TTA.DUAL.LOWRANK_RANKS,
             'query_type': cfg.TTA.DUAL.QUERY_TYPE,
         }
-        if model_type == 'RoCoBA_FreqDomain_Norm':
-            coba_params['seq_len'] = cfg.DATA.SEQ_LEN
         params.update(coba_params)
     elif model_type in ['RoCoBA_FreqDomain_Norm']:
         coba_params = {
@@ -85,16 +80,11 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     in_model = None
     out_model = None
     
-    # if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
-    #     # in_model = ModelClass(seq_len, n_var, **params)
-    #     in_model = tafas_GCM(seq_len, n_var, **params)
-    # if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
-    #     out_model = ModelClass(pred_len, n_var, **params)
-
     if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
-        in_model = tafas_GCM(seq_len, n_var_in, **params)
+        # in_model = ModelClass(seq_len, n_var, **params)
+        in_model = tafas_GCM(seq_len, n_var, **params)
     if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
-        out_model = ModelClass(pred_len, n_var_out, **params)
+        out_model = ModelClass(pred_len, n_var, **params)
     return CalibrationContainer(in_model, out_model)
 
 def build_loss_fn(cfg) -> nn.Module:
@@ -303,10 +293,7 @@ class Adapter(nn.Module):
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
                         assert enc_window_all is not None, "enc_window_all should not be None for RoCoBA_FreqDomain_Norm"
-                        # pred = self.cali.output_calibration(pred, enc_window_all)
-                        idx = self.cfg.DATA.TARGET_START_IDX if hasattr(self.cfg.DATA, 'TARGET_START_IDX') else 0
-                        enc_target = enc_window_all[:, :, idx : idx + self.cfg.MODEL.c_out]
-                        pred = self.cali.output_calibration(pred, enc_target)
+                        pred = self.cali.output_calibration(pred, enc_window_all)
                     else:
                         pred = self.cali.output_calibration(pred)
                 if isinstance(self.loss_fn, CoBA_Loss):
@@ -370,10 +357,7 @@ class Adapter(nn.Module):
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
                         enc_history = prepare_inputs(inputs_history)[0]
-                        # pred = self.cali.output_calibration(pred, enc_history)
-                        idx = self.cfg.DATA.TARGET_START_IDX if hasattr(self.cfg.DATA, 'TARGET_START_IDX') else 0
-                        enc_target = enc_history[:, :, idx : idx + self.cfg.MODEL.c_out]
-                        pred = self.cali.output_calibration(pred, enc_target)
+                        pred = self.cali.output_calibration(pred, enc_history)
                     else:
                         pred = self.cali.output_calibration(pred)
                     
@@ -406,10 +390,7 @@ class Adapter(nn.Module):
             if self.cali.output_calibration is not None:
                 if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
                     enc_window = prepare_inputs(inputs)[0]
-                    # pred = self.cali.output_calibration(pred, enc_window)
-                    idx = self.cfg.DATA.TARGET_START_IDX if hasattr(self.cfg.DATA, 'TARGET_START_IDX') else 0
-                    enc_target = enc_window[:, :, idx : idx + self.cfg.MODEL.c_out]
-                    pred = self.cali.output_calibration(pred, enc_target)
+                    pred = self.cali.output_calibration(pred, enc_window)
                 else:
                     pred = self.cali.output_calibration(pred)
                 
@@ -437,10 +418,7 @@ class Adapter(nn.Module):
         if self.cali.output_calibration is not None:
             if isinstance(self.cali.out_cali, RoCoBA_FreqDomain_Norm):
                 enc_window = prepare_inputs(inputs)[0]
-                # pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
-                idx = self.cfg.DATA.TARGET_START_IDX if hasattr(self.cfg.DATA, 'TARGET_START_IDX') else 0
-                enc_target = enc_window[:, :, idx : idx + self.cfg.MODEL.c_out]
-                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_target)
+                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
             else:
                 pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
         

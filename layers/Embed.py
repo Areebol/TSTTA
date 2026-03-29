@@ -183,12 +183,45 @@ class PatchEmbedding(nn.Module):
         # Residual dropout
         self.dropout = nn.Dropout(dropout)
 
+    # def forward(self, x):
+    #     # do patching
+    #     n_vars = x.shape[1]
+    #     x = self.padding_patch_layer(x)
+    #     x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+    #     x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
+    #     # Input encoding
+    #     x = self.value_embedding(x) + self.position_embedding(x)
+    #     return self.dropout(x), n_vars
+
     def forward(self, x):
-        # do patching
+        # x shape: [bs, n_vars, seq_len]
         n_vars = x.shape[1]
-        x = self.padding_patch_layer(x)
-        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        
+        # 1. 填充
+        x = self.padding_patch_layer(x) # [bs, n_vars, seq_len_padded]
+        
+        # 2. 手动 Patching (替代报错的 unfold)
+        # 原逻辑：x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        # NPU 兼容逻辑：通过列表推导式手动切片并叠加
+        bs, n_vars, seq_len = x.shape
+        num_patches = (seq_len - self.patch_len) // self.stride + 1
+        
+        patches = []
+        for i in range(num_patches):
+            # 每次在时间维度切出一个长度为 patch_len 的窗口
+            start = i * self.stride
+            end = start + self.patch_len
+            # patch shape: [bs, n_vars, patch_len]
+            patch = x[:, :, start:end]
+            patches.append(patch.unsqueeze(2)) # 插入 patch 维度 -> [bs, n_vars, 1, patch_len]
+            
+        # 拼接所有 patch -> [bs, n_vars, num_patches, patch_len]
+        x = torch.cat(patches, dim=2)
+        
+        # 3. 后续处理 (保持原样)
+        # x shape: [bs * n_vars, num_patches, patch_len]
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
+        
         # Input encoding
         x = self.value_embedding(x) + self.position_embedding(x)
         return self.dropout(x), n_vars

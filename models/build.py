@@ -6,6 +6,7 @@ import torch
 from models import Autoformer, iTransformer, DLinear, PatchTST, FreTS, MICN, Pyraformer, TimesNet, OLS, Koopa, KNF, LSTM
 from models import Informer, Reformer, Autoformer, ETSformer, FEDformer
 from models import LSTMVW, LSTMPCI, PatchTSTPCD, TimeXer, TimeXerPCD, TimeXerHCM, TimeXerRoadM, TimeXerRoadMMh
+from models import DLinearPCD, iTransformerPCD, FreTSPCD, MICNPCD,OLSPCD, DishTS, Statistics_prediction, RevIN
 from device_manager import global_device
 
 

@@ -145,7 +145,7 @@ class Predictor:
 
     def save_results(self, results):
         results_string = ", ".join([f"{metric}: {value:.04f}" for metric, value in results.items()])
-        print(f"Results without TSF-TTA for pred_len: {self.cfg.DATA.PRED_LEN}:")
+        print(f"Results without TSF-TTA for pred_len: {self.cfg.DATA.PRED_LEN} model {self.cfg.MODEL.NAME} alpha {self.cfg.MODEL.alpha}:")
         print(results_string)
 
         with open(os.path.join(mkdir(self.cfg.RESULT_DIR) / "test.txt"), "w") as f:

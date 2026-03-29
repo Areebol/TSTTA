@@ -424,15 +424,16 @@ class Adapter(nn.Module):
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
             
             if self.cfg.TTA.TAFAS.CALI_MODULE:
-                pred = self.cali.output_calibration(pred)
-                
+                # Detach to prevent gradients from flowing through model's patch embedding
+                pred = self.cali.output_calibration(pred.detach())
+            
             pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
             mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
                 
             self.optimizer.zero_grad()
             mse_partial.backward()
             self.optimizer.step()
-        return pred, ground_truth
+        return pred.detach(), ground_truth
 
     @torch.no_grad()
     def _adjust_prediction(self, pred, inputs, batch_size, period):
@@ -513,26 +514,56 @@ class GCM_Fusion(nn.Module):
         return x
 
 
+# class Calibration(nn.Module):
+#     def __init__(self, cfg):
+#         super(Calibration, self).__init__()
+#         self.cfg = cfg
+#         self.seq_len = cfg.DATA.SEQ_LEN
+#         self.pred_len = cfg.DATA.PRED_LEN
+#         self.n_var = cfg.DATA.N_VAR
+#         self.hidden_dim = cfg.TTA.TAFAS.HIDDEN_DIM
+#         self.gating_init = cfg.TTA.TAFAS.GATING_INIT
+#         self.var_wise = cfg.TTA.TAFAS.GCM_VAR_WISE
+#         if cfg.MODEL.NAME in ['PatchTST']:
+#             self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
+#             self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
+#         # elif cfg.MODEL.NAME in ['PatchTSTPCD', 'LSTM']:
+#         #     self.in_cali = None
+#         #     # self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
+#         #     self.out_cali = GCM(self.pred_len, cfg.MODEL.c_out, self.hidden_dim, self.gating_init, self.var_wise)
+#         else:
+#             self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
+#             self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
+        
+#     def input_calibration(self, inputs):
+#         enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
+#         if self.in_cali is not None:
+#             enc_window = self.in_cali(enc_window)
+#         return enc_window, enc_window_stamp, dec_window, dec_window_stamp
+
+#     def output_calibration(self, outputs):
+#         if self.out_cali is not None:
+#             outputs = self.out_cali(outputs)
+#         return outputs
+
 class Calibration(nn.Module):
     def __init__(self, cfg):
         super(Calibration, self).__init__()
         self.cfg = cfg
         self.seq_len = cfg.DATA.SEQ_LEN
         self.pred_len = cfg.DATA.PRED_LEN
-        self.n_var = cfg.DATA.N_VAR
+        
+        # 【完美修复】：分离输入和输出的真实通道数
+        self.enc_in = cfg.MODEL.enc_in  # 输入 20
+        self.c_out = cfg.MODEL.c_out    # 输出 2
+        
         self.hidden_dim = cfg.TTA.TAFAS.HIDDEN_DIM
         self.gating_init = cfg.TTA.TAFAS.GATING_INIT
         self.var_wise = cfg.TTA.TAFAS.GCM_VAR_WISE
-        if cfg.MODEL.NAME in ['PatchTST']:
-            self.in_cali = GCM(self.seq_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
-            self.out_cali = GCM(self.pred_len, 1, self.hidden_dim, self.gating_init, self.var_wise)
-        elif cfg.MODEL.NAME in ['PatchTSTPCD', 'LSTM']:
-            self.in_cali = None
-            # self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
-            self.out_cali = GCM(self.pred_len, cfg.MODEL.c_out, self.hidden_dim, self.gating_init, self.var_wise)
-        else:
-            self.in_cali = GCM(self.seq_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
-            self.out_cali = GCM(self.pred_len, self.n_var, self.hidden_dim, self.gating_init, self.var_wise)
+        
+        # 分别使用 enc_in 和 c_out 初始化
+        self.in_cali = GCM(self.seq_len, self.enc_in, self.hidden_dim, self.gating_init, self.var_wise)
+        self.out_cali = GCM(self.pred_len, self.c_out, self.hidden_dim, self.gating_init, self.var_wise)
         
     def input_calibration(self, inputs):
         enc_window, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)

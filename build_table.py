@@ -207,21 +207,22 @@ if __name__ == "__main__":
         os.makedirs("./results", exist_ok=True)
         
     build_summary_table(
-        input_dir="./results/", 
+
+        input_dir="./results//0328/455_2_10/", 
         # input_dir='/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125',
-        output_csv="./results/final_tta_summary.csv", 
+        output_csv="./results//0328/455_2_10/final_tta_summary.csv", 
         # output_csv="/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125/final_tta_summary.csv",
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTm2_2_ETTm1"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
-        dataset_names=['ETTh1'],
+        dataset_names=["eVED_2_eVED"],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
         # model_names=["DLinear", "PatchTST", "FreTS", "iTransformer", "MICN", "OLS"], 
-        model_names=["PatchTST", "DLinear"]
+        model_names=["PatchTSTPCD", "DLinearPCD", "FreTSPCD", "iTransformerPCD", "OLSPCD", "MICNPCD"]
         # model_names=["DLinear", "iTransformer"]
         # model_names=None # 设为 None 则显示所有模型
     )
