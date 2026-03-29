@@ -1,41 +1,38 @@
 #!/bin/bash
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=4               # Parallel jobs per NPU
+PER_NPU=1               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("PatchTST")
+MODELS=("DLinear" "iTransformer")
 
 # 固定迁移对: Source:Target
-# PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
-PAIRS=("ETTh2:ETTh1")
+PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
+PAIRS=("ETTh1:ETTh2")
 
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-# PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
-PATTERN_NUMS=(32)
+BASE_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # OFFLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
 # OFFLINE_LRS=(0.001 0.003 0.005 0.01 0.03 0.05 0.1)
-# OFFLINE_LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
+OFFLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
 # OFFLINE_LRS=(5e-4 1e-4 5e-5)
 # OFFLINE_LRS=(5e-4 3e-4 1e-4 5e-5 1e-5)
 # ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005 0.001)
 # OFFLINE_LRS=(0.01 0.03)
-# OFFLINE_LRS=(0.001)
-OFFLINE_LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
+OFFLINE_LRS=(0.01)
 # ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005 0.001)
 # ONLINE_LRS=(0.02 0.025 0.04)
-ONLINE_LRS=(0.01)
 
-LAMBDA_ORTHO=(1.0)
-QUERY_TYPES=("time-CI")
+LAMBDA_ORTHO=(1e-2)
+QUERY_TYPES=("freq-base-CI")
 
 parallel --lb -j ${TOTAL_JOBS} '
   npu_array=($NPU_STR)
@@ -58,13 +55,13 @@ parallel --lb -j ${TOTAL_JOBS} '
   PRED_LEN={3}
   OFFLINE_LR={4}
   LAMBDA_ORTHO={5}
-  N_PATTERNS={6}
+  N_BASES={6}
   QUERY_TYPE={7}
   ONLINE_LR={8}
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/ablation_lr/"
+  RESULT_DIR="./results/output_tta/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | Offline LR: ${OFFLINE_LR} | Online LR: ${ONLINE_LR} | NPU ${NPU_ID}"
@@ -81,23 +78,23 @@ parallel --lb -j ${TOTAL_JOBS} '
     TEST.ENABLE False \
     TTA.ENABLE True \
     TTA.DOMAIN_SHIFT True \
-    TTA.METHOD 'PKA' \
-    TTA.PKA.BATCH_SIZE 64 \
-    TTA.PKA.GATING_INIT 0.01 \
+    TTA.METHOD 'COBA' \
+    TTA.DUAL.BATCH_SIZE 64 \
+    TTA.DUAL.GATING_INIT 0.01 \
     TTA.SOLVER.BASE_LR ${OFFLINE_LR} \
-    TTA.PKA.PRETRAIN_EPOCHS 1 \
-    TTA.PKA.PAAS True \
-    TTA.PKA.ADJUST_PRED True \
-    TTA.PKA.CALI_NAME PKA_GCM \
-    TTA.PKA.LOSS_NAME CoBA_Loss \
-    TTA.PKA.QUERY_TYPE ${QUERY_TYPE} \
-    TTA.PKA.N_PATTERNS ${N_PATTERNS} \
-    TTA.PKA.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
-    TTA.PKA.COBA_ONLINE_LR ${ONLINE_LR} \
-    TTA.PKA.CALI_INPUT_ENABLE False \
-    TTA.PKA.CALI_OUTPUT_ENABLE True \
-    TTA.PKA.COBA_ONLINE_ENABLED False \
+    TTA.DUAL.PRETRAIN_EPOCHS 2 \
+    TTA.DUAL.PAAS True \
+    TTA.DUAL.ADJUST_PRED True \
+    TTA.DUAL.CALI_NAME RoCoBA_FreqDomain_Norm \
+    TTA.DUAL.LOSS_NAME Freq-EW-CoBALoss \
+    TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
+    TTA.DUAL.GCM_N_BASES ${N_BASES} \
+    TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
+    TTA.DUAL.COBA_ONLINE_LR ${ONLINE_LR} \
+    TTA.DUAL.CALI_INPUT_ENABLE False \
+    TTA.DUAL.CALI_OUTPUT_ENABLE True \
+    TTA.DUAL.COBA_ONLINE_ENABLED True \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${PATTERN_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${ONLINE_LRS[@]}"
+' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${ONLINE_LRS[@]}"

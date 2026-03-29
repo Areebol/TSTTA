@@ -2177,3 +2177,661 @@ class RoCoBA_FreqDomain_Norm(nn.Module):
         else:
             params.append(self.temp_params)
         return params
+
+
+
+class CoBA_Freq_Adapter(nn.Module): 
+    """
+    Revised Version: Implements Statistical Alignment & Normalized Residual Learning
+    
+    1. Main Path (Codebook): 
+       Input (Norm) -> FFT -> Query -> Select Freq Domain Bases -> iFFT -> Residual (Norm)
+    
+    2. Online Path (Test-time Adaptation):
+       Input (Norm) -> FFT -> Per-Variable Freq Transform -> iFFT -> Gated Residual (Norm)
+       
+    3. Output:
+       Base_Aligned + (Residual_Codebook + Residual_Online) * Input_Std
+    """
+    def __init__(self, window_len, n_var=1, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI', seq_len=96, eved_enable=False, 
+                 tau_min=0.1, tau_max=2.0, **kwargs):
+        super(CoBA_Freq_Adapter, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        self.freq_len = window_len // 2 + 1
+        self.seq_len = seq_len
+        self.eved_enable = eved_enable
+        
+        # --- 增加温度系数(Tau)作为私有变量 ---
+        self.min_tau = tau_min
+        self.max_tau = tau_max
+        # 初始化为最小 tau，保证不经任何调度时，测试行为是 sharp 的
+        self.current_tau = self.min_tau 
+
+        if self.feature_dim <= n_bases:
+            print(f"Warning: feature_dim ({self.feature_dim}) should be greater than n_bases ({self.n_bases}) for better retrieval performance.")
+            self.feature_dim = n_bases + 1
+
+        # --- 1. Codebook / Bases in Frequency Domain (Element-wise) ---
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
+        
+        if var_wise:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+        else:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+
+        # Initialization
+        self.scale = 1e-5
+        self._init_bases()
+        
+        if self.eved_enable:
+            self.query_len = window_len + window_len // 2 
+        else:
+            self.query_len = self.window_len + self.seq_len
+
+        # --- Query Net Selection Logic (Factory) ---
+        print(f"Initializing FV-CoBA (Element-Wise) with Query Type: {query_type}")
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(self.query_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(self.query_len, n_var, feature_dim)
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(self.query_len, n_var, feature_dim)
+        else:
+            print(f"Unknown query_type: {query_type}, defaulting to 'freq-base-CI'")
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(self.query_len, n_var, feature_dim)
+
+        # --- 3. Online Mode Parameters ---
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.temp_params = nn.Parameter(gating_init * torch.ones(1))
+        
+        if self.eved_enable:
+            self.freq_len_online = self.freq_len + window_len // 2 
+        else:
+            self.freq_len_online = self.freq_len + self.seq_len // 2 
+            
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+
+    # def _init_bases(self):
+    #     """
+    #     使用 Kaiming 初始化代替正交初始化，保证模式差异
+    #     """
+    #     with torch.no_grad():
+    #         if self.var_wise:
+    #             for v in range(self.n_var):
+    #                 joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+    #                 nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+    #                 bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+    #                 self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+    #                 self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+    #         else:
+    #             joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+    #             nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+    #             bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+    #             self.bases_r.data.copy_(bases_r_chunk * self.scale)
+    #             self.bases_i.data.copy_(bases_i_chunk * self.scale)
+
+    def _init_bases(self):
+        with torch.no_grad():
+            if self.var_wise:
+                for v in range(self.n_var):
+                    joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                    nn.init.orthogonal_(joint_bases)
+                    bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                    self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+                    self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+            else:
+                joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                nn.init.orthogonal_(joint_bases)
+                bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                self.bases_r.data.copy_(bases_r_chunk * self.scale)
+                self.bases_i.data.copy_(bases_i_chunk * self.scale)
+
+    def step_tau(self, current_step, total_steps):
+        """
+        供外部训练循环调用的接口：计算余弦退火并更新当前温度。
+        """
+        if current_step >= total_steps:
+            self.current_tau = self.min_tau
+        else:
+            cosine_decay = 0.5 * (1 + math.cos(math.pi * current_step / total_steps))
+            self.current_tau = self.min_tau + (self.max_tau - self.min_tau) * cosine_decay
+
+    def _get_query(self, x):
+        return self.query_net(x)
+    
+    def complex_element_wise_forward(self, x_fft, coeffs):
+        if self.var_wise:
+            w_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+        else:
+            w_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            w_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+
+        xr, xi = x_fft.real, x_fft.imag 
+        z_r = xr * w_r - xi * w_i
+        z_i = xr * w_i + xi * w_r
+              
+        return torch.complex(z_r, z_i)
+
+    def forward(self, x_base, x_enc=None):
+        """
+        Modified forward handling: 
+        1. Query via [x_enc ; x_base]
+        2. Unified Softmax using internal self.current_tau
+        """
+        B, L, _ = x_base.shape
+
+        # =======================================================
+        # [Phase 1]: Frequency Domain Processing
+        # =======================================================
+        x_fft = torch.fft.rfft(x_base, dim=1, norm='ortho')  # (B, F, V)
+
+        # --- 统一将 x_enc 和 x_base 拼接作为 Query ---
+        if x_enc is not None:
+            if getattr(self, 'eved_enable', False):
+                target_idx = [12, 13] 
+                x_enc_processed = x_enc[:, :, target_idx]
+            else:
+                x_enc_processed = x_enc
+                
+            adapter_ins = torch.cat([x_enc_processed, x_base], dim=1)
+            query = self._get_query(adapter_ins)
+        else:
+            query = self._get_query(x_base)
+        
+        query_norm = F.normalize(query, p=2, dim=-1)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        
+        # Calculate Cosine Similarity
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2),         # (B, V, 1, D)
+            keys_norm.transpose(1, 2)        # (V, D, N)
+        ).squeeze(2)                         # (B, V, N)
+        
+        # --- 训练和测试的统一 Softmax 聚合 ---
+        # 训练时使用当前的余弦退火值；测试(eval模式)时，强制使用极低的 min_tau
+        # 极低温度的 Softmax 会产生天然的 Top-k 效果，使得模型仅利用最相近的少数几个模式
+        # active_tau = self.current_tau if self.training else self.min_tau
+        active_tau = self.min_tau
+        active_tau = max(active_tau, 1e-5) # 防护，防止除以 0
+
+        coeffs = F.softmax(similarity / active_tau, dim=-1)
+        self.coeffs = coeffs
+
+        # 3. Main Path: Codebook-based Frequency Adaptation (Element-Wise)
+        delta_fft_codebook = self.complex_element_wise_forward(x_fft, coeffs)
+        delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+
+        # =======================================================
+        # [Phase 2]: Online Adaptation (on Normalized Data)
+        # =======================================================
+        if self.online_mode and x_enc is not None:
+            adapter_ins_online = torch.cat([x_enc_processed, x_base], dim=1)
+            
+            x_fft_online = torch.fft.rfft(adapter_ins_online, dim=1, norm='ortho')  # (B, F, V)
+            delta_real_online = (
+                x_fft_online.real * self.online_freq_r - x_fft_online.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft_online.imag * self.online_freq_r + x_fft_online.real * self.online_freq_i + self.online_bias_i
+            )
+            
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            
+            delta_time_online = torch.fft.irfft(y_online, n=adapter_ins_online.size(1), dim=1, norm='ortho')
+            delta_time_online = delta_time_online[:, -L:, :]
+            delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
+
+            total_residual_norm = delta_time_codebook + delta_time_online
+        else:
+            total_residual_norm = delta_time_codebook
+
+        # =======================================================
+        # [Phase 3]: Final Rescaling
+        # =======================================================
+        out = x_base + total_residual_norm
+
+        return out
+
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
+        else:
+            params.append(self.temp_params)
+        return params
+
+
+
+
+class Freq_Add_Adapter(nn.Module): 
+    """
+    Final Master Version: Zero-Centered Additive Patching 
+    
+    Core Mechanisms:
+    1. Zero-Centered Routing: Uses (q_i - 1/N) to ensure the initial patch is strictly 0 without suppressing gradient flow.
+    2. Orthogonal Constraint: `get_orthogonal_loss()` prevents mode collapse of the knowledge bases.
+    3. Budget Constraint: `get_budget_loss()` caps the relative energy of the patch to protect the source domain.
+    """
+    def __init__(self, window_len, n_var=1, hidden_dim=32,
+                 gating_init=0.01, var_wise=True,
+                 n_bases=8, feature_dim=32, query_type='freq-base-CI', seq_len=96, eved_enable=False, 
+                 tau_min=0.1, tau_max=2.0, **kwargs):
+        super(Freq_Add_Adapter, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = var_wise
+        self.n_bases = n_bases
+        self.feature_dim = feature_dim
+        self.online_mode = False
+        self.freq_len = window_len // 2 + 1
+        self.seq_len = seq_len
+        self.eved_enable = eved_enable
+        
+        # --- 温度系数(Tau) ---
+        self.min_tau = tau_min
+        self.max_tau = tau_max
+        self.current_tau = self.min_tau 
+
+        if self.feature_dim <= n_bases:
+            print(f"Warning: feature_dim ({self.feature_dim}) should be greater than n_bases ({self.n_bases}).")
+            self.feature_dim = n_bases + 1
+
+        # --- 1. Codebook / Bases in Frequency Domain ---
+        self.codebook_keys = nn.Parameter(torch.randn(n_var, n_bases, feature_dim))
+        
+        # 知识修补模板 C_i (实部和虚部)
+        if var_wise:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len, n_var))
+        else:
+            self.bases_r = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+            self.bases_i = nn.Parameter(torch.Tensor(n_bases, self.freq_len))
+
+        # --- 恢复正常的初始化 Scale，因为 Zero-Centered Routing 会保证初始安全 ---
+        self.scale = 1e-5
+        self._init_bases()
+        
+        if self.eved_enable:
+            self.query_len = window_len + window_len // 2 
+        else:
+            self.query_len = self.window_len + self.seq_len
+
+        # --- Query Net Selection Logic ---
+        if query_type == 'time':
+            self.query_net = QueryNet_Time(self.query_len, n_var, feature_dim) 
+        elif query_type == 'freq-base-CI':
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(self.query_len, n_var, feature_dim) 
+        elif query_type == 'freq-base-CD':
+            self.query_net = QueryNet_Freq_Base_ChannelDependence(self.query_len, n_var, feature_dim) 
+        else:
+            self.query_net = QueryNet_Freq_Base_ChannelIndependence(self.query_len, n_var, feature_dim)
+
+        # --- 3. Online Mode Parameters ---
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.temp_params = nn.Parameter(gating_init * torch.ones(1))
+        
+        if self.eved_enable:
+            self.freq_len_online = self.freq_len + window_len // 2 
+        else:
+            self.freq_len_online = self.freq_len + self.seq_len // 2 
+            
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+        
+        # 用于记录当前 batch 的相对修补能量，供外部约束 Loss 调用
+        self.current_relative_energy = None
+
+    def _init_bases(self):
+        """
+        使用 Kaiming 初始化保证模式发散，提供健康的初始梯度空间。
+        """
+        with torch.no_grad():
+            if self.var_wise:
+                for v in range(self.n_var):
+                    joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                    nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+                    bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                    
+                    self.bases_r.data[:, :, v] = bases_r_chunk * self.scale
+                    self.bases_i.data[:, :, v] = bases_i_chunk * self.scale
+            else:
+                joint_bases = torch.empty(self.n_bases, 2 * self.freq_len)
+                nn.init.kaiming_normal_(joint_bases, mode='fan_out', nonlinearity='linear')
+                bases_r_chunk, bases_i_chunk = torch.split(joint_bases, self.freq_len, dim=1)
+                
+                self.bases_r.data.copy_(bases_r_chunk * self.scale)
+                self.bases_i.data.copy_(bases_i_chunk * self.scale)
+
+    def step_tau(self, current_step, total_steps):
+        if current_step >= total_steps:
+            self.current_tau = self.min_tau
+        else:
+            cosine_decay = 0.5 * (1 + math.cos(math.pi * current_step / total_steps))
+            self.current_tau = self.min_tau + (self.max_tau - self.min_tau) * cosine_decay
+
+    def _get_query(self, x):
+        return self.query_net(x)
+    
+    def compute_additive_patch(self, coeffs):
+        """直接计算加法频域补丁，依靠外部的 (q_i - 1/N) 控制幅度"""
+        if self.var_wise:
+            patch_r = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_r)
+            patch_i = torch.einsum('bvn, nfv -> bfv', coeffs, self.bases_i)
+        else:
+            patch_r = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_r)
+            patch_i = torch.einsum('bvn, nf -> bfv', coeffs, self.bases_i)
+
+        complex_patch = torch.complex(patch_r, patch_i)
+        return complex_patch
+
+    # ==========================================
+    # 外部调用的正则化损失接口
+    # ==========================================
+    # def get_orthogonal_loss(self):
+    #     """多样性约束：避免知识向量同质化"""
+    #     if self.var_wise:
+    #         br_flat = self.bases_r.view(self.n_bases, -1)
+    #         bi_flat = self.bases_i.view(self.n_bases, -1)
+    #     else:
+    #         br_flat = self.bases_r.view(self.n_bases, -1)
+    #         bi_flat = self.bases_i.view(self.n_bases, -1)
+            
+    #     bases_flatten = torch.cat([br_flat, bi_flat], dim=-1)
+    #     bases_norm = F.normalize(bases_flatten, p=2, dim=-1)
+    #     sim_matrix = torch.matmul(bases_norm, bases_norm.t())
+        
+    #     mask = torch.eye(self.n_bases, device=sim_matrix.device).bool()
+    #     off_diagonal_sim = sim_matrix[~mask]
+        
+    #     return off_diagonal_sim.pow(2).mean()
+
+    def get_orthogonal_loss(self):
+        """多样性约束：同时避免 Key(路由条件) 和 Value(修补补丁) 发生模式坍塌"""
+        
+        # ==========================================
+        # 1. 对 Value 向量 (Bases) 的正交约束
+        # ==========================================
+        if self.var_wise:
+            br_flat = self.bases_r.view(self.n_bases, -1)
+            bi_flat = self.bases_i.view(self.n_bases, -1)
+        else:
+            br_flat = self.bases_r.view(self.n_bases, -1)
+            bi_flat = self.bases_i.view(self.n_bases, -1)
+            
+        bases_flatten = torch.cat([br_flat, bi_flat], dim=-1)
+        bases_norm = F.normalize(bases_flatten, p=2, dim=-1)
+        sim_matrix_v = torch.matmul(bases_norm, bases_norm.t())
+        
+        mask_v = torch.eye(self.n_bases, device=sim_matrix_v.device).bool()
+        off_diagonal_sim_v = sim_matrix_v[~mask_v]
+        loss_value = off_diagonal_sim_v.pow(2).mean()
+
+        # ==========================================
+        # 2. 对 Key 向量 (Codebook Keys) 的正交约束
+        # ==========================================
+        # self.codebook_keys 的 shape 是 (n_var, n_bases, feature_dim)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        # 在特征维度上计算每组 Keys 内部的相似度矩阵
+        sim_matrix_k = torch.matmul(keys_norm, keys_norm.transpose(1, 2)) # (n_var, n_bases, n_bases)
+        
+        mask_k = torch.eye(self.n_bases, device=sim_matrix_k.device).bool().unsqueeze(0) # (1, n_bases, n_bases)
+        mask_k = mask_k.expand_as(sim_matrix_k)  # (n_var, n_bases, n_bases)
+        off_diagonal_sim_k = sim_matrix_k[~mask_k]
+        loss_key = off_diagonal_sim_k.pow(2).mean()
+
+        # ==========================================
+        # 3. 组合返回
+        # ==========================================
+        # 赋予它们相同的权重，保证“触发条件”和“修补策略”同样丰富
+        return loss_value + loss_key
+
+    def get_budget_loss(self, gamma=0.05):
+        """
+        相对幅度约束：防止模型为了强行拟合目标域而过度扭曲频谱。
+        gamma: 容忍的最大相对能量扰动 (如 0.05 表示 5%)
+        """
+        if self.current_relative_energy is None:
+            device = self.codebook_keys.device
+            return torch.tensor(0.0, device=device)
+        
+        # Hinge Loss: 只有在超预算时才产生梯度惩罚
+        budget_loss = F.relu(self.current_relative_energy - gamma).mean()
+        return budget_loss
+
+    def forward(self, x_base, x_enc=None):
+        B, L, _ = x_base.shape
+
+        # --- 1. Query 计算 ---
+        if x_enc is not None:
+            if getattr(self, 'eved_enable', False):
+                target_idx = [12, 13] 
+                x_enc_processed = x_enc[:, :, target_idx]
+            else:
+                x_enc_processed = x_enc
+                
+            adapter_ins = torch.cat([x_enc_processed, x_base], dim=1)
+            query = self._get_query(adapter_ins)
+        else:
+            query = self._get_query(x_base)
+        
+        query_norm = F.normalize(query, p=2, dim=-1)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        
+        similarity = torch.matmul(
+            query_norm.unsqueeze(2), keys_norm.transpose(1, 2)
+        ).squeeze(2)
+        
+        # 强制使用一致的 tau 避免 eval() 时分布崩溃
+        active_tau = max(self.min_tau, 1e-5) 
+        
+        # --- 2. 【核心】去均值残差路由 (Zero-Centered Routing) ---
+        raw_coeffs = F.softmax(similarity / active_tau, dim=-1)
+        # 减去均匀分布均值，实现“不自信时不作为”的机制
+        # coeffs = raw_coeffs - (1.0 / self.n_bases)
+        coeffs = raw_coeffs
+        self.coeffs = coeffs 
+
+        # --- 3. 计算频域补丁并转回时域 ---
+        delta_fft_codebook = self.compute_additive_patch(coeffs)
+        delta_time_codebook = torch.fft.irfft(delta_fft_codebook, n=L, dim=1, norm='ortho')
+
+        # --- 4. 记录相对能量用于 Budget Loss ---
+        norm_delta = torch.linalg.norm(delta_time_codebook, dim=(1, 2)) # (B,)
+        norm_x = torch.linalg.norm(x_base, dim=(1, 2))                  # (B,)
+        self.current_relative_energy = norm_delta / (norm_x + 1e-8)
+
+        # --- 5. Online Mode (测试时自适应保留路径) ---
+        if self.online_mode and x_enc is not None:
+            adapter_ins_online = torch.cat([x_enc_processed, x_base], dim=1)
+            x_fft_online = torch.fft.rfft(adapter_ins_online, dim=1, norm='ortho') 
+            delta_real_online = (
+                x_fft_online.real * self.online_freq_r - x_fft_online.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft_online.imag * self.online_freq_r + x_fft_online.real * self.online_freq_i + self.online_bias_i
+            )
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            delta_time_online = torch.fft.irfft(y_online, n=adapter_ins_online.size(1), dim=1, norm='ortho')
+            delta_time_online = delta_time_online[:, -L:, :]
+            delta_time_online = torch.tanh(self.tafas_gating) * delta_time_online
+
+            total_residual_norm = delta_time_codebook + delta_time_online
+        else:
+            total_residual_norm = delta_time_codebook
+
+        # --- 6. 最终的加法修正 ---
+        out = x_base + total_residual_norm
+
+        return out
+
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
+        else:
+            params.append(self.temp_params)
+        return params
+
+
+class CoBA_TF_Adapter(nn.Module):
+    """
+    Hybrid Version: 
+    1. Offline Path (Time-Domain Codebook from PKA_GCM): 
+        Input -> Query -> Channel-Specific Static Keys -> Retrieve Static Values (Time Domain) -> Residual
+
+    2. Online Path (Test-time Adaptation in Frequency Domain):
+        Input -> FFT -> Per-Variable Freq Transform -> iFFT -> Gated Residual 
+    """
+    def __init__(self, window_len, n_var=1, seq_len=96, 
+                 n_static=8, feature_dim=16, temperature=10.0,
+                 bias_momentum=0.1, query_type='time-CI', gating_init=0.01, eved_enable=False, **kwargs):
+        super(CoBA_TF_Adapter, self).__init__()
+        self.seq_len = seq_len      
+        self.window_len = window_len
+        self.n_var = n_var
+        self.feature_dim = feature_dim
+        self.temperature = temperature
+        self.n_static = n_static
+        self.eved_enable = eved_enable
+        self.online_mode = False
+
+        if feature_dim < n_static:
+            self.feature_dim = n_static
+
+        input_len = seq_len + window_len
+        # 假设已定义 QueryNet_TimeCI (输出 B, V, D)
+        print('query params:', (input_len, n_var, self.feature_dim))
+        print('all params:', window_len, n_var, seq_len, 
+                 n_static, self.feature_dim, temperature,
+                 bias_momentum, query_type, kwargs)
+        self.query_net = QueryNet_TimeCI(input_len, n_var, self.feature_dim)
+        
+        # Static Keys: (n_var, n_static, feature_dim)
+        # 含义: 第 i 个变量拥有属于自己的 n_static 个基向量
+        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, self.feature_dim))
+        
+        # Static Values: (n_var, n_static, window_len)
+        # 含义: 第 i 个变量的第 j 个 Key 对应的修正量 (只修正该变量自己)
+        self.static_values = nn.Parameter(torch.zeros(n_var, n_static, self.window_len))
+        
+        # 初始化: 对每个变量的 Key 矩阵分别做正交初始化
+        for v in range(n_var):
+            nn.init.orthogonal_(self.static_keys[v])
+            # nn.init.kaiming_uniform_(self.static_values[v])
+        nn.init.zeros_(self.static_values)
+
+        # --- 3. Online Mode Parameters ---
+        self.scale = 1e-5
+        self.tafas_gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.temp_params = nn.Parameter(gating_init * torch.ones(1))
+        
+        if self.eved_enable:
+            self.freq_len_online = (window_len // 2 + 1) + window_len // 2 
+        else:
+            self.freq_len_online = (window_len // 2 + 1) + self.seq_len // 2 
+            
+        self.online_freq_r = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_freq_i = nn.Parameter(self.scale * torch.randn(1, self.freq_len_online, n_var))
+        self.online_bias_r = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+        self.online_bias_i = nn.Parameter(torch.zeros(1, self.freq_len_online, n_var))
+
+    def _get_query(self, x, y_base):
+        # x: (B, L_in, V), y_base: (B, L_out, V) -> (B, L_all, V)
+        query_input = torch.cat([x, y_base], dim=1) 
+        query = self.query_net(query_input) # (B, V, D)
+        query = F.normalize(query, p=2, dim=-1) 
+        return query
+
+    def forward(self, y_base, x=None):
+        """
+        Channel-Specific Retrieval Logic
+        """
+        batch_size = y_base.shape[0]
+        # 1. 获取 Query: (B, V, D)
+        query = self._get_query(x, y_base) 
+
+        # --- Static Retrieval ---
+        # Query: (B, V, D)
+        # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
+        # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
+        
+        # Einsum 解析:
+        # bvd: batch, var, dim
+        # vnd: var, static_idx, dim
+        # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
+        sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
+        
+        w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+        
+        # Correction:
+        # w_static: (B, V, N)
+        # Values:   (V, N, H)
+        # -> bvh: batch, var, horizon (输出修正量)
+        delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+        
+        # Transpose output to match y_base (B, H, V)
+        delta_static = delta_static.permute(0, 2, 1)
+
+        # --- Online Adapter ---
+        if self.online_mode and x is not None:
+            B, L, _ = y_base.shape
+            in_online = torch.cat([x, y_base], dim=1)
+            
+            x_fft_online = torch.fft.rfft(in_online, dim=1, norm='ortho')  # (B, F, V)
+            delta_real_online = (
+                x_fft_online.real * self.online_freq_r - x_fft_online.imag * self.online_freq_i + self.online_bias_r
+            )
+            delta_imag_online = (
+                x_fft_online.imag * self.online_freq_r + x_fft_online.real * self.online_freq_i + self.online_bias_i
+            )
+            
+            y_online = torch.complex(delta_real_online, delta_imag_online)
+            
+            delta_online = torch.fft.irfft(y_online, n=in_online.size(1), dim=1, norm='ortho')
+            delta_online = delta_online[:, -L:, :]
+            delta_online = torch.tanh(self.tafas_gating) * delta_online
+
+            total_residual = delta_static + delta_online
+        else:
+            total_residual = delta_static
+
+        # 4. Fusion
+        y_final = y_base + total_residual
+        
+        # return y_final, z_t
+        return y_final
+    
+    def get_optim_params(self):
+        params = []
+        if self.online_mode:
+            params.append(self.online_freq_r)
+            params.append(self.online_freq_i)
+            params.append(self.online_bias_r)
+            params.append(self.online_bias_i)
+            params.append(self.tafas_gating)
+        else:
+            params.append(self.temp_params)
+        return params

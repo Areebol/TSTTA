@@ -61,6 +61,14 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'seq_len': seq_len,
         }
         params.update(coba_params)
+    elif model_type == 'CoBA_TF_Adapter':
+        coba_params = {
+            'n_static': cfg.TTA.PKA.N_PATTERNS,
+            'energy_threshold': cfg.TTA.PKA.ENERGY_THRESHOLD,
+            'query_type': cfg.TTA.PKA.QUERY_TYPE,
+            'seq_len': seq_len,
+        }
+        params.update(coba_params)
     elif model_type in ['PKA_LDict']:
         coba_params = {
             'n_static': cfg.TTA.PKA.N_PATTERNS,
@@ -174,6 +182,7 @@ class Adapter(nn.Module):
             parts.append("coba-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
 
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_LDict' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
             parts.append("pka-ldict-offline")
@@ -361,6 +370,7 @@ class Adapter(nn.Module):
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
+            save_dir=self.cfg.RESULT_DIR,
         )
         self.model.eval()
 

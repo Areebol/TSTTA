@@ -14,8 +14,8 @@ class Model(nn.Module):
         self.num_layers = getattr(configs, 'e_layers', 1)
         self.dropout = getattr(configs, 'dropout', 0.1)
 
-        # 核心 LSTM 层 (通道独立处理)
-        # input_size=1: 因为我们将每个通道的数据作为独立序列输入
+        # 1. 核心 LSTM 层 (保持通道独立处理)
+        # input_size=1: 每个通道的数据依然作为独立序列输入
         self.lstm = nn.LSTM(
             input_size=1,
             hidden_size=self.hidden_size,
@@ -24,9 +24,13 @@ class Model(nn.Module):
             dropout=self.dropout if self.num_layers > 1 else 0
         )
 
-        # 输出层 (投影层)
-        # 同样是通道独立的：将单一通道的隐状态直接映射到 pred_len
-        self.projection = nn.Linear(self.hidden_size, self.pred_len)
+        # 2. 输出层 (通道信息融合)
+        # 输入维度: 所有通道的隐状态拼接在一起 (Channels * Hidden_Size)
+        # 输出维度: 预测所有通道的未来步长 (Pred_Len * Channels)
+        self.projection = nn.Linear(
+            self.enc_in * self.hidden_size, 
+            self.pred_len * self.enc_in
+        )
 
     def forward(self, x_enc, x_mark_enc=None, x_dec=None, x_mark_dec=None, mask=None):
         """
@@ -34,42 +38,42 @@ class Model(nn.Module):
         """
         B, S, C = x_enc.shape
         
-        # 1. 通道独立化维度转换 (Channel Independence)
+        # 1. LSTM 前置处理 (Channel Independence)
         # [Batch, Seq_Len, Channels] -> [Batch, Channels, Seq_Len]
         x_enc = x_enc.permute(0, 2, 1)
         
-        # 将 Batch 和 Channels 展平在一起，序列变更为单特征输入
         # [Batch, Channels, Seq_Len] -> [Batch * Channels, Seq_Len, 1]
         x_enc = x_enc.reshape(B * C, S, 1)
         
-        # 2. LSTM 前向传播
-        # 所有通道的数据使用共享参数的同一个 LSTM 处理
+        # 2. LSTM 前向传播 (各通道独立提取特征)
         _, (h_n, _) = self.lstm(x_enc)
         
         # 3. 获取最后一层的隐状态
-        # h_n shape: [Num_Layers, Batch * Channels, Hidden_Size] -> 取最后一层 -> [Batch * Channels, Hidden_Size]
+        # h_n shape: [Num_Layers, Batch * Channels, Hidden_Size] -> [Batch * Channels, Hidden_Size]
         last_hidden = h_n[-1, :, :]
         
-        # 4. 线性投影
-        # [Batch * Channels, Hidden_Size] -> [Batch * Channels, Pred_Len]
-        output = self.projection(last_hidden)
+        # 4. 准备通道融合 (Channel Mixing)
+        # 先将 Batch 和 Channels 拆开: [Batch * Channels, Hidden_Size] -> [Batch, Channels, Hidden_Size]
+        last_hidden = last_hidden.view(B, C, self.hidden_size)
         
-        # 5. 还原形状并调整维度顺序以匹配输出要求
-        # 先拆分开 Batch 和 Channels: [Batch * Channels, Pred_Len] -> [Batch, Channels, Pred_Len]
-        output = output.view(B, C, self.pred_len)
+        # 将 Channels 和 Hidden_Size 展平，以便全连接层可以同时看到所有通道的信息
+        # [Batch, Channels, Hidden_Size] -> [Batch, Channels * Hidden_Size]
+        last_hidden_flat = last_hidden.view(B, C * self.hidden_size)
         
-        # 调整回原始多变量输出格式: [Batch, Channels, Pred_Len] -> [Batch, Pred_Len, Channels]
-        output = output.permute(0, 2, 1)
+        # 5. 线性投影 (进行通道融合并输出预测)
+        # [Batch, Channels * Hidden_Size] -> [Batch, Pred_Len * Channels]
+        output = self.projection(last_hidden_flat)
+        
+        # 6. 还原为最终的时序输出形状
+        # [Batch, Pred_Len * Channels] -> [Batch, Pred_Len, Channels]
+        output = output.view(B, self.pred_len, C)
         
         return output
     
-    # 以下为你原代码中的其他方法占位符，如果需要实际使用它们，
-    # 也需要确保底层调用 forward 的维度对应得上。
     def forecast(self, x_enc, x_mark_enc=None, x_dec=None, x_mark_dec=None):
         return self.forward(x_enc, x_mark_enc, x_dec, x_mark_dec)
 
     def imputation(self, x_enc):
-        # 补全任务的逻辑需视具体定义而定
         pass
 
     def anomaly_detection(self, x_enc):

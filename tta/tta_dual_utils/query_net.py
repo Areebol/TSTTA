@@ -185,7 +185,7 @@ class QueryNet_Freq_Base_ChannelIndependence(nn.Module):
         """
         # 1. FFT 变换
         # x_fft: (Batch, Freq_len, N_var)
-        x_fft = torch.fft.rfft(x, dim=1)
+        x_fft = torch.fft.rfft(x, dim=1) # TODO, add norm='ortho' for stability?
         
         # 2. 计算幅度
         # x_mag: (Batch, Freq_len, N_var)

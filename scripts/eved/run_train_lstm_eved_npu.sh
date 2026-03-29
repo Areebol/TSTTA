@@ -14,14 +14,14 @@ LABEL_LEN=12
 PRED_LEN=24
 patch_len=16
 stride=8
-MODEL="LSTM"
+# MODEL="LSTM"
 # MODEL="PatchTST"
 # MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
 # MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM" "TimeXerRoadM")
-# MODELS=("LSTM")
+# MODELS=("LSTMPCI")
 MODELS=("LSTMPCI" "LSTMPCD")
 # DATASETS=("sVED")
 DATASETS=("eVED")
@@ -33,8 +33,10 @@ PRED_LENS=(24)
 
 # LRS=(1e-2 1e-3 1e-4 1e-5)
 LRS=(1e-2 1e-4)
+# LRS=(1e-4)
 
 # NPUS=(0 1 2 3)          # 可用的 NPU ID
+NPUS=(0)          # 可用的 NPU ID
 # NPUS=(12 13 14 15)          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
@@ -66,12 +68,13 @@ parallel --lb -j ${TOTAL_JOBS} '
   patch_len=4
   stride=4
   LABEL_LEN=12
-  e_layers=1
+  e_layers=4
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_${LR}"
   mkdir -p "${CHECKPOINT_DIR}"
 
-  export CUDA_VISIBLE_DEVICES=${GPU_ID}
+  # export CUDA_VISIBLE_DEVICES=${GPU_ID}
+  export ASCEND_RT_VISIBLE_DEVICES=${GPU_ID}
 
   echo "[INFO] Dataset: ${DATASET}, Model: ${MODEL}, Pred_len: ${PRED_LEN}, LR ${LR}, GPU: ${GPU_ID}"
   echo "[INFO] Checkpoint dir: ${CHECKPOINT_DIR}"

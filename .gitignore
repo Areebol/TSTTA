@@ -27,3 +27,4 @@ checkpoints*/
 *.npz
 plots
 docs/
+*.json
