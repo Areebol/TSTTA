@@ -1,0 +1,3 @@
+bash scripts/eved/run_online_eved_10_2_455_dynaTTA.sh
+
+bash scripts/eved/run_online_eved_455_2_10_dynaTTA.sh

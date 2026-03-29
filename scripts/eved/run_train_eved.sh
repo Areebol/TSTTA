@@ -18,6 +18,17 @@ stride=8
 # MODEL="PatchTST"
 MODEL="PatchTSTPCD"
 
+TRAIN_IDS="['455']"
+TEST_IDS="['10']"
+VAL_IDS=${TRAIN_IDS}
+# Clean TRAIN_IDS for directory naming: remove [, ], ', " and spaces
+TRAIN_IDS_CLEAN=$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")
+
+export TRAIN_IDS
+export TEST_IDS
+export VAL_IDS
+export TRAIN_IDS_CLEAN
+
 # training hyperparams (tune as needed)
 EPOCHS=30
 BATCH_SIZE=256
@@ -36,6 +47,9 @@ python main.py \
   DATA.SEQ_LEN ${SEQ_LEN} \
   DATA.PRED_LEN ${PRED_LEN} \
   DATA.LABEL_LEN ${LABEL_LEN} \
+  DATA.TRAIN_VEHICLE_IDS "${TRAIN_IDS}" \
+  DATA.VAL_VEHICLE_IDS "${VAL_IDS}" \
+  DATA.TEST_VEHICLE_IDS "${TEST_IDS}" \
   MODEL.NAME ${MODEL} \
   MODEL.pred_len ${PRED_LEN} \
   MODEL.label_len ${LABEL_LEN} \

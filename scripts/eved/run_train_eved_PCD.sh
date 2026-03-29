@@ -14,14 +14,14 @@ LABEL_LEN=12
 PRED_LEN=24
 patch_len=16
 stride=8
-MODEL="LSTM"
+# MODEL="LSTM"
 # MODEL="PatchTST"
 # MODEL="LSTM"
 # MODEL="DLinear"
 
 # MODELS=("iTransformer" "Informer" "Reformer" "Autoformer" "ETSformer" "FEDformer" "Pyraformer" "TST")
 # MODELS=("LSTM" "PatchTSTPCD" "TimeXer" "TimeXerPCD" "TimeXerHCM" "TimeXerRoadM" "TimeXerRoadMMh")
-MODELS=("TimeXer" "TimeXerRoadM")
+MODELS=("DLinearPCD" "FreTSPCD")
 # DATASETS=("sVED")
 DATASETS=("eVED")
 # DATASETS=("oVED")
@@ -32,10 +32,11 @@ PRED_LENS=(24)
 
 # training hyperparams (tune as needed)
 
-LRS=(1e-2 1e-3 1e-4 1e-5)
+# LRS=(1e-2 1e-3 1e-4 1e-5)
 # LRS=(1e-1 1e-2 1e-3 1e-4)
+LRS=(1e-4)
 
-NPUS=(0 1 2 3)          # 可用的 NPU ID
+NPUS=(1 2 )          # 可用的 NPU ID
 # NPUS=(0 1 2 3 4 5 6 7)  # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
@@ -52,7 +53,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   # slot_idx：parallel 的任务槽位 → 映射到某个 NPU
   slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
-  GPU_ID=${npu_array[$slot_idx]}
+  NPU_ID=${npu_array[$slot_idx]}
 
 
   MODEL={1}
@@ -67,12 +68,12 @@ parallel --lb -j ${TOTAL_JOBS} '
   stride=4
   LABEL_LEN=12
 
-  CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_${LR}"
+  CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}_${LR}_2"
   mkdir -p "${CHECKPOINT_DIR}"
 
-  export CUDA_VISIBLE_DEVICES=${GPU_ID}
+  export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
 
-  echo "[INFO] Dataset: ${DATASET}, Model: ${MODEL}, Pred_len: ${PRED_LEN}, LR ${LR}, GPU: ${GPU_ID}"
+  echo "[INFO] Dataset: ${DATASET}, Model: ${MODEL}, Pred_len: ${PRED_LEN}, LR ${LR}, NPU: ${NPU_ID}"
   echo "[INFO] Checkpoint dir: ${CHECKPOINT_DIR}"
   echo "[INFO] Epochs: ${EPOCHS}, Batch size: ${BATCH_SIZE}, LR: ${LR}"
 
