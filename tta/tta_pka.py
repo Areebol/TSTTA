@@ -61,6 +61,14 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'seq_len': seq_len,
         }
         params.update(coba_params)
+    elif model_type == 'CoBA_TF_Adapter':
+        coba_params = {
+            'n_static': cfg.TTA.PKA.N_PATTERNS,
+            'energy_threshold': cfg.TTA.PKA.ENERGY_THRESHOLD,
+            'query_type': cfg.TTA.PKA.QUERY_TYPE,
+            'seq_len': seq_len,
+        }
+        params.update(coba_params)
     elif model_type in ['PKA_LDict']:
         coba_params = {
             'n_static': cfg.TTA.PKA.N_PATTERNS,

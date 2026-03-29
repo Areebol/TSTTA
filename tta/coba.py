@@ -18,6 +18,7 @@ from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_d
 
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
+from tta.pattern_bank import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
@@ -58,6 +59,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'CoBA_Freq_Adapter': CoBA_Freq_Adapter,
         'Freq_Add_Adapter': Freq_Add_Adapter, 
         'CoBA_TF_Adapter': CoBA_TF_Adapter,
+        'PKA_GCM': PKA_GCM,
     }
     
     if model_type == 'CoBA_GCM':
@@ -65,14 +67,15 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': getattr(cfg.TTA.DUAL, 'LOWRANK_RANKS', None),
             'query_type': getattr(cfg.TTA.DUAL, 'QUERY_TYPE', 'freq-base-CI'),
+            'n_static': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
+    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
         coba_params = {
             'seq_len': cfg.DATA.SEQ_LEN,
         }
@@ -91,6 +94,8 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         in_model = tafas_GCM(seq_len, n_var, **params)
     if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
         out_model = ModelClass(pred_len, n_var, **params)
+
+    print(params)
     return CalibrationContainer(in_model, out_model)
 
 def build_loss_fn(cfg) -> nn.Module:
@@ -163,7 +168,7 @@ class Adapter(nn.Module):
 
         parts = []
         # 增加对 Freq_Add_Adapter 的命名支持
-        if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
+        if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
             if self.cfg.TTA.DUAL.CALI_NAME == 'Freq_Add_Adapter':
                 prefix = "freq-add"
             elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_TF_Adapter':
@@ -203,7 +208,7 @@ class Adapter(nn.Module):
         )
 
         # 判断条件增加 Freq_Add_Adapter
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED 
             
@@ -226,7 +231,16 @@ class Adapter(nn.Module):
         else:
             print("No adapter pre-training needed.")
 
-    
+        # if isinstance(self.cali.out_cali, (CoBA_GCM, PKA_GCM, CoBA_TF_Adapter)):
+        #     self._pretrain_adapter()
+        #     self.cali.out_cali.online_mode = self.cfg.TTA.PKA.COBA_ONLINE_ENABLED # Enable online mode after pre-training
+        
+        # else:
+        #     print("No adapter pre-training needed.")
+
+    def _freeze_all(self):
+        self.manager._freeze_all()
+
     def _pretrain_adapter(self):
         self._switch_model_to_train()
         total_steps = self.cfg.TTA.DUAL.PRETRAIN_EPOCHS * len(self.tta_train_loader)
@@ -247,7 +261,7 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                         assert enc_window_all is not None, "enc_window_all should not be None for FreqDomain_Norm"
                         pred = self.cali.output_calibration(pred, enc_window_all)
                     else:
@@ -282,10 +296,11 @@ class Adapter(nn.Module):
                 self.cali.out_cali.analyzer.end_epoch()
                 
         self._switch_model_to_eval()
+        # self._freeze_all()
 
         # 生成可视化
         if self.cfg.TTA.VISUALIZE:
-            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, (CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, (CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                 try:
                     save_directory = f"./vis_results/{self.save_name}"
                     print(f"\n[*] Generating individual channel visualizations for {self.cali.out_cali.__class__.__name__} (N={self.cali.out_cali.n_bases})...")
@@ -339,7 +354,7 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                         enc_history = prepare_inputs(inputs_history)[0]
                         pred = self.cali.output_calibration(pred, enc_history)
                     else:
@@ -385,7 +400,7 @@ class Adapter(nn.Module):
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
-                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                     enc_window = prepare_inputs(inputs)[0]
                     # 这一步前向传播会计算并记录 Freq_Add_Adapter 的 relative_energy
                     pred = self.cali.output_calibration(pred, enc_window)
@@ -425,7 +440,7 @@ class Adapter(nn.Module):
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
-            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
+            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                 enc_window = prepare_inputs(inputs)[0]
                 pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
             else:

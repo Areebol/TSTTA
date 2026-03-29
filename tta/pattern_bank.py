@@ -220,6 +220,10 @@ class PKA_GCM(nn.Module):
 
         input_len = seq_len + window_len
         # 假设已定义 QueryNet_TimeCI (输出 B, V, D)
+        print('query params:', (input_len, n_var, self.feature_dim))
+        print('all params:', window_len, n_var, seq_len, 
+                 n_static, self.feature_dim, temperature,
+                 bias_momentum, query_type, kwargs)
         self.query_net = QueryNet_TimeCI(input_len, n_var, self.feature_dim)
         
         # =========================================================
@@ -249,6 +253,8 @@ class PKA_GCM(nn.Module):
 
         # Bias (Global Shift)
         self.register_buffer('global_bias', torch.zeros(self.window_len, n_var))
+
+        self.tmep_parameter = nn.Parameter(torch.zeros(1))
 
     def _get_query(self, x, y_base):
         # x: (B, L_in, V), y_base: (B, L_out, V) -> (B, L_all, V)
@@ -326,7 +332,8 @@ class PKA_GCM(nn.Module):
         # 4. Fusion
         y_final = y_base + self.global_bias + delta_static + delta_dynamic
         
-        return y_final, z_t
+        # return y_final, z_t
+        return y_final
 
     def update_bias(self, y_gt, y_base_pred, y_final_pred=None):
         # Bias shape: (H, V) - 也是独立的，没问题
@@ -410,6 +417,9 @@ class PKA_GCM(nn.Module):
                     self.dynamic_values = self.dynamic_values[keep_mask]
                     self.dynamic_counts = self.dynamic_counts[keep_mask] - self.dynamic_counts.min()
 
+    def get_optim_params(self):
+        # 只优化 Static Memory 的参数，Dynamic Memory 是在线更新的，不参与反向传播
+        return [self.tmep_parameter]
 
 class PKA_OnLine(nn.Module):
     def __init__(self, window_len, n_var=1, seq_len=96, 
