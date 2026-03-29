@@ -215,9 +215,12 @@ class PKA_GCM(nn.Module):
         self.n_static = n_static
         self.max_capacity = n_static * 2
 
+        if feature_dim < n_static:
+            self.feature_dim = n_static
+
         input_len = seq_len + window_len
         # 假设已定义 QueryNet_TimeCI (输出 B, V, D)
-        self.query_net = QueryNet_TimeCI(input_len, n_var, feature_dim)
+        self.query_net = QueryNet_TimeCI(input_len, n_var, self.feature_dim)
         
         # =========================================================
         # [关键修改 1] 参数维度提升，实现通道隔离
@@ -225,7 +228,7 @@ class PKA_GCM(nn.Module):
         
         # Static Keys: (n_var, n_static, feature_dim)
         # 含义: 第 i 个变量拥有属于自己的 n_static 个基向量
-        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, feature_dim))
+        self.static_keys = nn.Parameter(torch.randn(n_var, n_static, self.feature_dim))
         
         # Static Values: (n_var, n_static, window_len)
         # 含义: 第 i 个变量的第 j 个 Key 对应的修正量 (只修正该变量自己)
@@ -239,7 +242,7 @@ class PKA_GCM(nn.Module):
 
         # Dynamic Memory Buffer
         # Shape: (Capacity, n_var, feature_dim) -> 随时间增长，但每个时刻都存所有变量的快照
-        self.register_buffer('dynamic_keys', torch.empty(0, n_var, feature_dim))
+        self.register_buffer('dynamic_keys', torch.empty(0, n_var, self.feature_dim))
         self.register_buffer('dynamic_values', torch.empty(0, n_var, self.window_len))
         # LFU Counts (针对每个时刻的 snapshot)
         self.register_buffer('dynamic_counts', torch.empty(0, dtype=torch.float32))

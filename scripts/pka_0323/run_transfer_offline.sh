@@ -1,5 +1,5 @@
 #!/bin/bash
-NPUS=(0 1)          # Available NPU IDs
+NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -13,12 +13,12 @@ MODELS=("PatchTST")
 
 # 固定迁移对: Source:Target
 # PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
-PAIRS=("ETTh1:ETTh2")
+PAIRS=("ETTh2:ETTh1")
 
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
-# PATTERN_NUMS=(16)
+# PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
+PATTERN_NUMS=(32)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # OFFLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
@@ -28,7 +28,8 @@ PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
 # OFFLINE_LRS=(5e-4 3e-4 1e-4 5e-5 1e-5)
 # ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005 0.001)
 # OFFLINE_LRS=(0.01 0.03)
-OFFLINE_LRS=(0.01)
+# OFFLINE_LRS=(0.001)
+OFFLINE_LRS=(1e-1 1e-2 1e-3 1e-4 1e-5)
 # ONLINE_LRS=(0.1 0.05 0.03 0.01 0.005 0.001)
 # ONLINE_LRS=(0.02 0.025 0.04)
 ONLINE_LRS=(0.01)
@@ -63,7 +64,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/ablation_base_num/"
+  RESULT_DIR="./results/ablation_lr/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | Offline LR: ${OFFLINE_LR} | Online LR: ${ONLINE_LR} | NPU ${NPU_ID}"
@@ -84,7 +85,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.PKA.BATCH_SIZE 64 \
     TTA.PKA.GATING_INIT 0.01 \
     TTA.SOLVER.BASE_LR ${OFFLINE_LR} \
-    TTA.PKA.PRETRAIN_EPOCHS 2 \
+    TTA.PKA.PRETRAIN_EPOCHS 1 \
     TTA.PKA.PAAS True \
     TTA.PKA.ADJUST_PRED True \
     TTA.PKA.CALI_NAME PKA_GCM \

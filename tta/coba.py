@@ -56,7 +56,8 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
         'RoCoBA_FreqDomain_Norm': RoCoBA_FreqDomain_Norm,
         'CoBA_Freq_Adapter': CoBA_Freq_Adapter,
-        'Freq_Add_Adapter': Freq_Add_Adapter, # [修改 1] 注册新模型
+        'Freq_Add_Adapter': Freq_Add_Adapter, 
+        'CoBA_TF_Adapter': CoBA_TF_Adapter,
     }
     
     if model_type == 'CoBA_GCM':
@@ -64,14 +65,14 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }
         params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
+    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
             'low_ranks': getattr(cfg.TTA.DUAL, 'LOWRANK_RANKS', None),
             'query_type': getattr(cfg.TTA.DUAL, 'QUERY_TYPE', 'freq-base-CI'),
         }
         params.update(coba_params)
-    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
+    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
         coba_params = {
             'seq_len': cfg.DATA.SEQ_LEN,
         }
@@ -102,7 +103,7 @@ def build_loss_fn(cfg) -> nn.Module:
         alpha = getattr(cfg.TTA.DUAL, 'PETSA_LOSS_ALPHA', 0.1)
         return PETSALoss(alpha=alpha)
     elif loss_name == "CoBA_Loss":
-        return CoBA_Loss(lambda_ortho=0.01)
+        return CoBA_Loss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     elif loss_name == "LOWRANK-COBA":
         return LowRankCoBALoss(lambda_ortho=cfg.TTA.DUAL.LAMBDA_ORTHO)
     elif loss_name == "Freq-LowRank-CoBA":
@@ -162,14 +163,20 @@ class Adapter(nn.Module):
 
         parts = []
         # 增加对 Freq_Add_Adapter 的命名支持
-        if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
-            prefix = "freq-add" if self.cfg.TTA.DUAL.CALI_NAME == 'Freq_Add_Adapter' else "coba-feq"
+        if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter']:
+            if self.cfg.TTA.DUAL.CALI_NAME == 'Freq_Add_Adapter':
+                prefix = "freq-add"
+            elif self.cfg.TTA.DUAL.CALI_NAME == 'CoBA_TF_Adapter':
+                prefix = "coba-tf"
+            else:
+                prefix = "coba-feq"
+
             if not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
                 parts.append(f"{prefix}-adapter-offline")
                 parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
                 parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
-                parts.append(f'lambda-bud-{self.cfg.TTA.DUAL.LAMBDA_BUDGET:.3f}')
-                parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
+                # parts.append(f'lambda-bud-{self.cfg.TTA.DUAL.LAMBDA_BUDGET:.3f}')
+                # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
             else:
                 parts.append(f"{prefix}-adapter-online")
                 parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
@@ -179,7 +186,6 @@ class Adapter(nn.Module):
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-norm-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
-        # ... (保留原有的其他分支)
         else:
             parts.append(f"{cali_name}-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
@@ -197,7 +203,7 @@ class Adapter(nn.Module):
         )
 
         # 判断条件增加 Freq_Add_Adapter
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED 
             
@@ -241,7 +247,7 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
                         assert enc_window_all is not None, "enc_window_all should not be None for FreqDomain_Norm"
                         pred = self.cali.output_calibration(pred, enc_window_all)
                     else:
@@ -256,11 +262,8 @@ class Adapter(nn.Module):
                 
                 # 原有的其他方法 Loss
                 elif isinstance(self.loss_fn, CoBA_Loss):
-                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
-                elif isinstance(self.loss_fn, LowRankCoBALoss):
-                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
-                elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
-                    loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
+                    # loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.static_keys)
                 elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
                     loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
                 elif isinstance(self.loss_fn, DiversityCoBALoss):
@@ -282,7 +285,7 @@ class Adapter(nn.Module):
 
         # 生成可视化
         if self.cfg.TTA.VISUALIZE:
-            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, (CoBA_Freq_Adapter, Freq_Add_Adapter)):
+            if self.cali.output_calibration is not None and isinstance(self.cali.out_cali, (CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
                 try:
                     save_directory = f"./vis_results/{self.save_name}"
                     print(f"\n[*] Generating individual channel visualizations for {self.cali.out_cali.__class__.__name__} (N={self.cali.out_cali.n_bases})...")
@@ -336,7 +339,7 @@ class Adapter(nn.Module):
                 pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
+                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
                         enc_history = prepare_inputs(inputs_history)[0]
                         pred = self.cali.output_calibration(pred, enc_history)
                     else:
@@ -349,7 +352,8 @@ class Adapter(nn.Module):
                     budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
                     loss = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
                 elif isinstance(self.loss_fn, CoBA_Loss):
-                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                    # loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
+                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.static_keys)
                 elif isinstance(self.loss_fn, LowRankCoBALoss):
                     loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
                 elif isinstance(self.loss_fn, (FreqLowRankCoBALoss)):
@@ -381,7 +385,7 @@ class Adapter(nn.Module):
             pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
-                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
+                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
                     enc_window = prepare_inputs(inputs)[0]
                     # 这一步前向传播会计算并记录 Freq_Add_Adapter 的 relative_energy
                     pred = self.cali.output_calibration(pred, enc_window)
@@ -397,7 +401,8 @@ class Adapter(nn.Module):
                 budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
                 loss_partial = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
             elif isinstance(self.loss_fn, CoBA_Loss):
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
+                # loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
+                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.static_keys)
             elif isinstance(self.loss_fn, LowRankCoBALoss):
                 loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
             elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
@@ -420,7 +425,7 @@ class Adapter(nn.Module):
             inputs = self.cali.input_calibration(inputs)
         pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
-            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
+            if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter)):
                 enc_window = prepare_inputs(inputs)[0]
                 pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
             else:
