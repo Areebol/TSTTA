@@ -208,8 +208,9 @@ if __name__ == "__main__":
         
     build_summary_table(
         # input_dir="./results/", 
-        input_dir="./results/base_num_ablation", 
+        input_dir="./results/ablation_base_num", 
         # input_dir="./results/lambda_k_ablation",
+        # input_dir="./results/ablation_lr/",
         output_csv="./results/final_tta_summary.csv", 
         # output_csv="/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125/final_tta_summary.csv",
         
@@ -217,12 +218,12 @@ if __name__ == "__main__":
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTm2_2_ETTm1"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
-        dataset_names=['ETTm2_2_ETTm1'],
+        dataset_names=['ETTh1'],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
         # model_names=["DLinear", "PatchTST", "FreTS", "iTransformer", "MICN", "OLS"], 
-        model_names=["DLinear"]
+        model_names=["PatchTST"]
         # model_names=["DLinear", "iTransformer"]
         # model_names=None # 设为 None 则显示所有模型
     )

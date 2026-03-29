@@ -175,6 +175,7 @@ class Adapter(nn.Module):
             parts.append("coba-online")
             parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
             parts.append(f'onlinelr-{self.cfg.TTA.PKA.COBA_ONLINE_LR}')
+            parts.append(f'patterns-{self.cfg.TTA.PKA.N_PATTERNS:03d}')
         
         elif self.cfg.TTA.PKA.CALI_NAME == 'PKA_OnLine' and not self.cfg.TTA.PKA.COBA_ONLINE_ENABLED:
             parts.append("pka-offline")
@@ -414,6 +415,7 @@ class Adapter(nn.Module):
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
+            save_dir=self.cfg.RESULT_DIR,
         )
         self.model.eval()
 

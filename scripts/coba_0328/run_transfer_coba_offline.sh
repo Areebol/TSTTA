@@ -8,7 +8,6 @@ TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
 export NPU_STR
-export NNPU
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
 MODELS=("DLinear")
@@ -24,16 +23,15 @@ PAIRS=("ETTm2:ETTm1")
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(720)
 BASE_NUMS=(1 2 4 8 16 32 64 128 256)
-# BASE_NUMS=(32 64 128 256)
+# BASE_NUMS=(1)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 # LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 3e-3 1e-3)
 # LRS=(0.01)
-OFFLINE_LRS=(0.0001)
-ONLINE_LRS=(0.01)
+LRS=(0.0001)
+# SEEDS=(0 1 2 3 4)
 SEEDS=(0 1 2)
-# SEEDS=(0)
 
 LAMBDA_ORTHO=(1e-2)
 QUERY_TYPES=("freq-base-CI")
@@ -56,19 +54,18 @@ parallel --lb -j ${TOTAL_JOBS} '
   TARGET=$(echo $PAIR | cut -d: -f2)
 
   PRED_LEN={3}
-  OFFLINE_LR={4}
+  LR={4}
   LAMBDA_ORTHO={5}
   N_BASES={6}
   QUERY_TYPE={7}
   SEED={8}
-  ONLINE_LR={9}
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
   RESULT_DIR="./results/base_num_ablation/"
   mkdir -p "${RESULT_DIR}"
   
-  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | OFFLINE_LR: ${OFFLINE_LR} | ONLINE_LR: ${ONLINE_LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
+  echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | LR: ${LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED}"
 
   python main.py \
     SEED ${SEED} \
@@ -85,20 +82,20 @@ parallel --lb -j ${TOTAL_JOBS} '
     TTA.METHOD 'COBA' \
     TTA.DUAL.BATCH_SIZE 64 \
     TTA.DUAL.GATING_INIT 0.01 \
-    TTA.SOLVER.BASE_LR ${OFFLINE_LR} \
+    TTA.SOLVER.BASE_LR ${LR} \
     TTA.DUAL.PRETRAIN_EPOCHS 5 \
     TTA.DUAL.PAAS True \
     TTA.DUAL.ADJUST_PRED True \
     TTA.DUAL.CALI_NAME CoBA_Freq_Adapter \
-    TTA.DUAL.LOSS_NAME DiversityCoBALoss \
+    TTA.DUAL.LOSS_NAME MSE \
     TTA.DUAL.QUERY_TYPE ${QUERY_TYPE} \
     TTA.DUAL.GCM_N_BASES ${N_BASES} \
     TTA.DUAL.LAMBDA_ORTHO ${LAMBDA_ORTHO} \
-    TTA.DUAL.COBA_ONLINE_LR ${ONLINE_LR} \
+    TTA.DUAL.COBA_ONLINE_LR 1e-3 \
     TTA.DUAL.CALI_INPUT_ENABLE False \
     TTA.DUAL.CALI_OUTPUT_ENABLE True \
-    TTA.DUAL.COBA_ONLINE_ENABLED True \
+    TTA.DUAL.COBA_ONLINE_ENABLED False \
     TTA.VISUALIZE False \
     RESULT_DIR ${RESULT_DIR}
 
-' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}" ::: "${ONLINE_LRS[@]}"
+' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${LRS[@]}" ::: "${LAMBDA_ORTHO[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${SEEDS[@]}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+NPUS=(0 1 2 3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=1               # Parallel jobs per NPU
@@ -17,9 +17,9 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTh1")
 
 PRED_LENS=(96 192 336 720)
-# PRED_LENS=(96)
-PATTERN_NUMS=(2 4 8 16 32 64 128 256 512)
-PATTERN_NUMS=(16)
+# PRED_LENS=(720)
+PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
+# PATTERN_NUMS=(16)
 # PATTERN_NUMS=(128)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
@@ -65,7 +65,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/output_tta/"
+  RESULT_DIR="./results/ablation_base_num/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} | Len: ${PRED_LEN} | Offline LR: ${OFFLINE_LR} | Online LR: ${ONLINE_LR} | NPU ${NPU_ID}"

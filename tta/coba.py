@@ -161,26 +161,28 @@ class Adapter(nn.Module):
         cali_name = getattr(self.cfg.TTA.DUAL, 'CALI_NAME', 'unknown')
 
         parts = []
-        # [修改 2] 增加对 Freq_Add_Adapter 的命名支持
+        # 增加对 Freq_Add_Adapter 的命名支持
         if self.cfg.TTA.DUAL.CALI_NAME in ['CoBA_Freq_Adapter', 'Freq_Add_Adapter']:
             prefix = "freq-add" if self.cfg.TTA.DUAL.CALI_NAME == 'Freq_Add_Adapter' else "coba-feq"
             if not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
                 parts.append(f"{prefix}-adapter-offline")
-                parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+                parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
                 parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+                parts.append(f'lambda-bud-{self.cfg.TTA.DUAL.LAMBDA_BUDGET:.3f}')
+                parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
             else:
                 parts.append(f"{prefix}-adapter-online")
-                parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR}')
-                parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR}')
+                parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
+                parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR:.5f}')
                 parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
                 
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-norm-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
         # ... (保留原有的其他分支)
         else:
             parts.append(f"{cali_name}-offline")
-            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR}')
+            parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
 
         self.save_name = "-".join(parts)
         self.mse_all = []
@@ -194,7 +196,7 @@ class Adapter(nn.Module):
             and hasattr(ds, "get_test_windows_for_csv")
         )
 
-        # [修改 3] 判断条件增加 Freq_Add_Adapter
+        # 判断条件增加 Freq_Add_Adapter
         if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED 
@@ -224,7 +226,7 @@ class Adapter(nn.Module):
         total_steps = self.cfg.TTA.DUAL.PRETRAIN_EPOCHS * len(self.tta_train_loader)
 
         # 提取当前超参数，可以配置在 yaml 里，这里做防御性获取
-        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.05)
+        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.01)
         lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
         budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
 
@@ -284,7 +286,7 @@ class Adapter(nn.Module):
                 try:
                     save_directory = f"./vis_results/{self.save_name}"
                     print(f"\n[*] Generating individual channel visualizations for {self.cali.out_cali.__class__.__name__} (N={self.cali.out_cali.n_bases})...")
-                    visualize_freq_add_knowledge_vectors_per_var(
+                    visualize_knowledge_vectors(
                         adapter=self.cali.out_cali, 
                         save_dir=save_directory,
                         max_vars=10 
@@ -292,7 +294,29 @@ class Adapter(nn.Module):
                 except Exception as e:
                     print(f"[!] Warning: Failed to visualize knowledge vectors: {e}")
 
-    # ... (省略中间保持不变的 _reset 到 _calculate_period_and_batch_size 方法)
+    def _reset(self):
+        self.manager.reset()
+        self.optimizer.load_state_dict(deepcopy(self.optimizer_state))
+
+    def _switch_model_to_train(self):
+        self.manager.train()
+    
+    def _switch_model_to_eval(self):
+        self.manager.eval()   
+    
+    def _calculate_period_and_batch_size(self, enc_window_first):
+        fft_result = torch.fft.rfft(enc_window_first - enc_window_first.mean(dim=0), dim=0)
+        # amplitude = torch.abs(fft_result)
+        # amplitude = torch.sqrt(fft_result.real.pow(2) + fft_result.imag.pow(2))
+        amplitude = stable_complex_abs(fft_result)
+        power = torch.mean(amplitude ** 2, dim=0)
+        try:
+            period = enc_window_first.shape[0] // torch.argmax(amplitude[:, power.argmax()]).item()
+        except:
+            period = 24
+        period *= self.cfg.TTA.DUAL.PERIOD_N
+        batch_size = period + 1
+        return period, batch_size
     
     def _adapt_with_full_ground_truth_if_available(self):
         lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.05)

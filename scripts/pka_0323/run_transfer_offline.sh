@@ -1,23 +1,24 @@
 #!/bin/bash
-NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
+NPUS=(0 1)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
-PER_NPU=1               # Parallel jobs per NPU
+PER_NPU=4               # Parallel jobs per NPU
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
 export NPU_STR
 
 MODELS=("DLinear" "FreTS" "iTransformer" "MICN" "OLS" "PatchTST")
-MODELS=("PatchTST" "DLinear")
+MODELS=("PatchTST")
 
 # 固定迁移对: Source:Target
 # PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
-PAIRS=("ETTh1:ETTh2" "ETTm1:ETTm2")
+PAIRS=("ETTh1:ETTh2")
 
 PRED_LENS=(96 192 336 720)
 # PRED_LENS=(96)
-PATTERN_NUMS=(16)
+PATTERN_NUMS=(1 2 4 8 16 32 64 128 256 512)
+# PATTERN_NUMS=(16)
 
 # LRS=(1e-1 5e-2 3e-2 1e-2)
 # OFFLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5)
@@ -62,7 +63,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/output_tta/"
+  RESULT_DIR="./results/ablation_base_num/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} -> ${TARGET} | Len: ${PRED_LEN} | Offline LR: ${OFFLINE_LR} | Online LR: ${ONLINE_LR} | NPU ${NPU_ID}"

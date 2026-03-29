@@ -2546,8 +2546,30 @@ class Freq_Add_Adapter(nn.Module):
     # ==========================================
     # 外部调用的正则化损失接口
     # ==========================================
+    # def get_orthogonal_loss(self):
+    #     """多样性约束：避免知识向量同质化"""
+    #     if self.var_wise:
+    #         br_flat = self.bases_r.view(self.n_bases, -1)
+    #         bi_flat = self.bases_i.view(self.n_bases, -1)
+    #     else:
+    #         br_flat = self.bases_r.view(self.n_bases, -1)
+    #         bi_flat = self.bases_i.view(self.n_bases, -1)
+            
+    #     bases_flatten = torch.cat([br_flat, bi_flat], dim=-1)
+    #     bases_norm = F.normalize(bases_flatten, p=2, dim=-1)
+    #     sim_matrix = torch.matmul(bases_norm, bases_norm.t())
+        
+    #     mask = torch.eye(self.n_bases, device=sim_matrix.device).bool()
+    #     off_diagonal_sim = sim_matrix[~mask]
+        
+    #     return off_diagonal_sim.pow(2).mean()
+
     def get_orthogonal_loss(self):
-        """多样性约束：避免知识向量同质化"""
+        """多样性约束：同时避免 Key(路由条件) 和 Value(修补补丁) 发生模式坍塌"""
+        
+        # ==========================================
+        # 1. 对 Value 向量 (Bases) 的正交约束
+        # ==========================================
         if self.var_wise:
             br_flat = self.bases_r.view(self.n_bases, -1)
             bi_flat = self.bases_i.view(self.n_bases, -1)
@@ -2557,12 +2579,30 @@ class Freq_Add_Adapter(nn.Module):
             
         bases_flatten = torch.cat([br_flat, bi_flat], dim=-1)
         bases_norm = F.normalize(bases_flatten, p=2, dim=-1)
-        sim_matrix = torch.matmul(bases_norm, bases_norm.t())
+        sim_matrix_v = torch.matmul(bases_norm, bases_norm.t())
         
-        mask = torch.eye(self.n_bases, device=sim_matrix.device).bool()
-        off_diagonal_sim = sim_matrix[~mask]
+        mask_v = torch.eye(self.n_bases, device=sim_matrix_v.device).bool()
+        off_diagonal_sim_v = sim_matrix_v[~mask_v]
+        loss_value = off_diagonal_sim_v.pow(2).mean()
+
+        # ==========================================
+        # 2. 对 Key 向量 (Codebook Keys) 的正交约束
+        # ==========================================
+        # self.codebook_keys 的 shape 是 (n_var, n_bases, feature_dim)
+        keys_norm = F.normalize(self.codebook_keys, p=2, dim=-1)
+        # 在特征维度上计算每组 Keys 内部的相似度矩阵
+        sim_matrix_k = torch.matmul(keys_norm, keys_norm.transpose(1, 2)) # (n_var, n_bases, n_bases)
         
-        return off_diagonal_sim.pow(2).mean()
+        mask_k = torch.eye(self.n_bases, device=sim_matrix_k.device).bool().unsqueeze(0) # (1, n_bases, n_bases)
+        mask_k = mask_k.expand_as(sim_matrix_k)  # (n_var, n_bases, n_bases)
+        off_diagonal_sim_k = sim_matrix_k[~mask_k]
+        loss_key = off_diagonal_sim_k.pow(2).mean()
+
+        # ==========================================
+        # 3. 组合返回
+        # ==========================================
+        # 赋予它们相同的权重，保证“触发条件”和“修补策略”同样丰富
+        return loss_value + loss_key
 
     def get_budget_loss(self, gamma=0.05):
         """
@@ -2606,7 +2646,8 @@ class Freq_Add_Adapter(nn.Module):
         # --- 2. 【核心】去均值残差路由 (Zero-Centered Routing) ---
         raw_coeffs = F.softmax(similarity / active_tau, dim=-1)
         # 减去均匀分布均值，实现“不自信时不作为”的机制
-        coeffs = raw_coeffs - (1.0 / self.n_bases)
+        # coeffs = raw_coeffs - (1.0 / self.n_bases)
+        coeffs = raw_coeffs
         self.coeffs = coeffs 
 
         # --- 3. 计算频域补丁并转回时域 ---
