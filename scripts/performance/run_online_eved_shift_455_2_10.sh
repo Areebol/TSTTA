@@ -5,16 +5,16 @@
 ############################################
 
 # MODELS=("PatchTSTPCD" "DLinearPCD" "FreTSPCD" "iTransformerPCD" "OLSPCD" "MICNPCD" ) 
-# MODELS=("PatchTSTPCD" "DLinearPCD" "FreTSPCD" )
-MODELS=( "iTransformerPCD" )
+MODELS=("iTransformerPCD" )
+# MODELS=("PatchTST" "iTransformer" "OLSP" "DLinear" "FreTS"  "MICN" ) 
 # DATASETS=("eVED")
 # TTA_METHODS=("TAFAS" "PETSA" "DynaTTA")
-TTA_METHODS=("TAFAS" )
+TTA_METHODS=("TAFAS")
 # TTA_METHODS=("DynaTTA")
 # TTA_METHODS=("TAFAS" "PETSA")
 # PRED_LENS=(24)
 # PRED_LENS=(48 96 192)
-PRED_LENS=(24 48 96 192)
+PRED_LENS=(24 48 96 192) 
 BASE_LRS=(1e-4)
 TTA_LRS=(1e-4)
 
@@ -38,7 +38,7 @@ export TEST_IDS
 export VAL_IDS
 export TRAIN_IDS_CLEAN
 
-NPUS=(0 1 2 3 )          # 可用的 NPU ID
+NPUS=(0)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
 PER_NPU=1               # 每个 NPU 并行任务数
@@ -66,7 +66,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     TARGET=$(echo $PAIR | cut -d: -f2)
 
     CHECKPOINT_DIR="./checkpoints/0327/${MODEL}/${DATASET}_${PRED_LEN}_${BASE_LR}_ep_30_455_2_10"
-    RESULT_DIR="./results/0328/455_2_10/${TTA_METHOD}/${MODEL}/"
+    RESULT_DIR="./results/performance/"
 
     echo "Job slot {%}: NPU=${NPU_ID} | MODEL={1} | TTA={6} |  ${DATASET} -> ${TARGET} | PRED_LEN={3} BASE_LR={4} TTA_LR={5}"
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
@@ -90,6 +90,8 @@ parallel --lb -j ${TOTAL_JOBS} '
         MODEL.pred_len ${PRED_LEN} \
         MODEL.seq_len ${PRED_LEN} \
         MODEL.label_len 12 \
+        MODEL.patch_len 8 \
+        MODEL.stride 4 \
         NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
         NORM_MODULE.NAME ${NORM_MODULE_NAME} \
         TRAIN.ENABLE False \

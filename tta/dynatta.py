@@ -300,6 +300,7 @@ class DynaTTAAdapter(nn.Module):
         每个 CSV 结束后可选重置模型与优化器（cfg.TTA.RESET）。
         """
         from torch.utils.data import DataLoader, Subset
+        from tta.tta_dual_utils.npu_profiler import synchronize_device, record_performance, reset_memory_stats
 
         ds = self.test_loader.dataset
         num_csv = ds.get_num_test_csvs()
@@ -320,6 +321,13 @@ class DynaTTAAdapter(nn.Module):
         self.time_counts = defaultdict(int)
 
         total_start_time = time.time()
+
+        print("[Calculate-DynaTTA] Starting per-CSV adaptation and evaluation for EVED dataset...")
+        reset_memory_stats()
+        synchronize_device()
+        start_time = time.time()
+        
+        total_samples_processed = 0
 
         for csv_idx in range(num_csv):
             indices = ds.get_test_windows_for_csv(csv_idx)
@@ -390,11 +398,17 @@ class DynaTTAAdapter(nn.Module):
                     batch_start = batch_end
                     batch_idx += 1
 
+                    total_samples_processed += bs
+
             # 每个 CSV 完成后可根据配置重置模型与优化器
             if getattr(self.cfg.TTA, "RESET", False):
                 self.reset()
             self.switch_eval()
 
+        synchronize_device()
+        end_time = time.time()
+        record_performance(self.cfg, self, start_time, end_time, total_samples_processed)
+        
         self.time_stats['total_time'] = time.time() - total_start_time
 
 

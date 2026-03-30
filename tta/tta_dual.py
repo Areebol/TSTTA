@@ -19,7 +19,6 @@ from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
 
-
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
@@ -55,6 +54,7 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'RoCoBA_FreqDomain_GCM': RoCoBA_FreqDomain_GCM,
         'EnCoBA_FreqDomain_GCM': EnCoBA_FreqDomain_GCM,
         'RoCoBA_FreqDomain_Norm': RoCoBA_FreqDomain_Norm,
+        'CoBA_TF_Adapter': CoBA_TF_Adapter, 
     }
     if model_type == 'CoBA_GCM':
         coba_params = {

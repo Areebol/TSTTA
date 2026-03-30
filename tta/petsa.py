@@ -299,11 +299,19 @@ class Adapter(nn.Module):
         ds = self.test_loader.dataset
         num_csv = ds.get_num_test_csvs()
         from torch.utils.data import DataLoader, Subset
+        from tta.tta_dual_utils.npu_profiler import synchronize_device, record_performance, reset_memory_stats
 
         self.mse_all = []
         self.mae_all = []
         self.mse_per_var_all = []
         self.n_adapt = 0
+
+        reset_memory_stats()
+        synchronize_device()
+        start_time = time.time()
+        
+        total_samples_processed = 0
+        print("[Calculate-PETSA] Synchronizing device for throughput measurement...")
 
         for csv_idx in range(num_csv):
             # 为当前 csv 构建子 dataset / dataloader
@@ -373,10 +381,18 @@ class Adapter(nn.Module):
                     batch_start = batch_end
                     batch_idx += 1
 
+                    total_samples_processed += batch_size
+
             # 当前 路径 完成后，重置模型/优化器，以防影响下一个 CSV
             if self.cfg.TTA.RESET: self.reset()
             self.switch_model_to_eval()
 
+        synchronize_device()
+        end_time = time.time()
+        
+        # 3. 调用合并后的终极记录函数
+        record_performance(self.cfg, self, start_time, end_time, total_samples_processed)
+        
         self.mse_all = np.concatenate(self.mse_all) if self.mse_all else np.array([])
         self.mae_all = np.concatenate(self.mae_all) if self.mae_all else np.array([])
         self.mse_per_var_all = np.concatenate(self.mse_per_var_all) if self.mse_per_var_all else np.array([])

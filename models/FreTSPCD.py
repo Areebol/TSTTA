@@ -49,11 +49,15 @@ class Model(nn.Module):
             self.pred_len = configs.seq_len
         else:
             self.pred_len = configs.pred_len
-        # self.embed_size = 128  # embed_size
-        # self.hidden_size = 256  # hidden_size
+        self.embed_size = 128  # embed_size
+        self.hidden_size = 256  # hidden_size
 
-        self.embed_size = getattr(configs, 'd_model', 32) 
-        self.hidden_size = getattr(configs, 'd_ff', 64)
+        if configs.pred_len in [192]:
+            self.embed_size = 64
+            self.hidden_size = 128
+
+        # self.embed_size = getattr(configs, 'd_model', 32) 
+        # self.hidden_size = getattr(configs, 'd_ff', 64)
 
         self.pred_len = configs.pred_len
         self.feature_size = configs.enc_in  # channels

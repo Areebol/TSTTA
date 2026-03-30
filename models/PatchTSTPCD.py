@@ -72,6 +72,10 @@ class Model(nn.Module):
         # 获取配置
         patch_len = getattr(configs, "patch_len", 16)
         stride = getattr(configs, "stride", 8)
+
+        if configs.pred_len in [96,192]:
+            patch_len = 16
+            stride = 8
         # 【新增配置项】是否开启输出层融合，你可以手动设置为 True
         use_fused_head = getattr(configs, "use_fused_head", True) 
 
