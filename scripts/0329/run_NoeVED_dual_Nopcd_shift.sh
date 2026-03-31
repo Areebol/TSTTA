@@ -5,9 +5,9 @@
 ############################################
 
 # 1. 硬件设置 (根据你的 NPU 数量调整)
-NPUS=(0 1 2 3 )
+NPUS=(2 3 )
 NNPU=${#NPUS[@]}
-PER_NPU=1
+PER_NPU=4
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -23,8 +23,8 @@ PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1")
 PRED_LENS=(96 192 336 720)
 
 # 5. Dual-TTA 核心超参数
-export OFFLINE_LRS=(1e-2 3e-2 5e-2 1e-3 3e-4 1e-4 1e-5 )      # 预训练适配阶段的学习率
-export ONLINE_LRS=(1e-3 3e-3 5e-3 1e-4 3e-4 5e-4 1e-5)       # 在线流式更新阶段的学习率
+export OFFLINE_LRS=(1e-1 5e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+export ONLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 export N_BASES=32
 export QUERY_TYPE="time-CI"
 export LAMBDA_ORTHO=1.0
@@ -50,10 +50,10 @@ parallel --lb -j ${TOTAL_JOBS} '
 
     # 路径定义
     CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}/"
-    RESULT_DIR="./results/Dual_ETT_Transfer/${PAIR}/${MODEL}/"
+    RESULT_DIR="./results/Dual_ETT_Transfer2/${PAIR}/${MODEL}/"
     mkdir -p "${RESULT_DIR}"
 
-    echo "Job slot {%}: NPU=${NPU_ID} | ${MODEL} | ${DATASET} -> ${TARGET} | PRED=${PRED_LEN}"
+    echo "Job slot {%}: NPU=${NPU_ID} | ${MODEL} | ${DATASET} -> ${TARGET} | PRED=${PRED_LEN} | ON_LR=${ONLINE_LR} | OFF_LR=${OFFLINE_LR}"
     
     # 华为 NPU 环境变量
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}

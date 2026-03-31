@@ -23,7 +23,7 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 DATASETS=("ETTh1")
 
 PRED_LENS=(96 192 336 720)
-PRED_LENS=(720)
+# PRED_LENS=(720)
 # BASE_NUMS=(1 2 4 8 16 32 64 128 256)
 
 BASE_NUMS=(32)
@@ -44,8 +44,8 @@ SEEDS=(0)
 LAMBDA_KEYS=(1.0)
 # LAMBDA_BUDGETS=(0.01 0.1 0.0 1.0 10.0)
 LAMBDA_BUDGETS=(1.0)
-# LAMBDA_ORTHOS=(0.001 0.01 0.1 0.0 1.0 10.0 100.0)
-LAMBDA_ORTHOS=(1.0)
+LAMBDA_ORTHOS=(0.0 0.01 0.1 1.0 10.0 100.0)
+# LAMBDA_ORTHOS=(1.0)
 # LAMBDA_KEYS=(0.0001 0.001 0.01 0.1 1.0 10.0 100.0)
 QUERY_TYPES=("time-CI")
 
@@ -73,7 +73,7 @@ parallel --lb -j ${TOTAL_JOBS} '
 
   CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}"
 
-  RESULT_DIR="./results/ablation_base_num/"
+  RESULT_DIR="./results/ablation_lambda/"
   mkdir -p "${RESULT_DIR}"
   
   echo "Running experiment: ${MODEL} | ${DATASET} | Len: ${PRED_LEN} | LR: ${LR} | BASE_NUMS: ${N_BASES} | SEED: ${SEED} | LAMBDA_BUDGET: ${LAMBDA_BUDGET} | LAMBDA_ORTHO: ${LAMBDA_ORTHO}"

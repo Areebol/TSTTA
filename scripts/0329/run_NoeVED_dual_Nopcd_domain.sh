@@ -7,7 +7,7 @@
 # 1. 硬件设置
 NPUS=(0 1 2 3)
 NNPU=${#NPUS[@]}
-PER_NPU=1
+PER_NPU=4
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -19,8 +19,8 @@ DATASETS=("ETTh1" "ETTh2" "ETTm1" "ETTm2" "exchange_rate" "weather")
 PRED_LENS=(96 192 336 720)
 
 # 3. Dual-TTA 核心参数 (使用 export 确保在 parallel 子进程中可见)
-export OFFLINE_LRS=(1e-2 3e-2 5e-2 1e-3 3e-4 1e-4)
-export ONLINE_LRS=(1e-3 3e-3 5e-3 1e-4 5e-4 1e-5)
+export OFFLINE_LRS=(1e-1 5e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+export ONLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 export N_BASES=32
 export QUERY_TYPE="time-CI"
 export LAMBDA_ORTHO=1.0
@@ -40,10 +40,10 @@ parallel --lb -j ${TOTAL_JOBS} '
     TARGET={2}
 
     CHECKPOINT_DIR="./checkpoints/${MODEL}/${DATASET}_${PRED_LEN}/"
-    RESULT_DIR="./results/Dual_InDomain/${DATASET}/${MODEL}/"
+    RESULT_DIR="./results/Dual_InDomain2/${DATASET}/${MODEL}/"
     mkdir -p "${RESULT_DIR}"
 
-    echo "Job slot {%}: NPU=${NPU_ID} | ${MODEL} | ${DATASET} | PRED=${PRED_LEN} | ON_LR=${ON_LR}"
+    echo "Job slot {%}: NPU=${NPU_ID} | ${MODEL} | ${DATASET} | PRED=${PRED_LEN} | ON_LR=${ON_LR} | OFF_LR=${OFF_LR}"
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
 
     # 注意：这里的变量现在必须通过环境变量读取，或者直接把值写死

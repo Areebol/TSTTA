@@ -181,12 +181,13 @@ class Adapter(nn.Module):
                 parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
                 parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
                 # parts.append(f'lambda-bud-{self.cfg.TTA.DUAL.LAMBDA_BUDGET:.3f}')
-                # parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
+                parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
             else:
                 parts.append(f"{prefix}-adapter-online")
                 parts.append(f'offlinelr-{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
                 parts.append(f'onlinelr-{self.cfg.TTA.DUAL.COBA_ONLINE_LR:.5f}')
                 parts.append(f'n-{self.cfg.TTA.DUAL.GCM_N_BASES:03d}')
+                parts.append(f'lambda-ortho-{self.cfg.TTA.DUAL.LAMBDA_ORTHO:.3f}')
                 
         elif self.cfg.TTA.DUAL.CALI_NAME == 'RoCoBA_FreqDomain_Norm' and not self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
             parts.append("ro-coba-feq-norm-offline")

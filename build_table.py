@@ -13,7 +13,7 @@ def excel_colname(n):
 
 # --- 修改点 1: 在函数定义中增加了 model_names 参数 ---
 def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=None):
-    csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
+    csv_files = glob.glob(os.path.join(input_dir, "**/*.csv"),recursive=True)
     if not csv_files:
         print(f"No CSV files found in {input_dir}")
         return
@@ -210,15 +210,19 @@ if __name__ == "__main__":
         # input_dir="./results/", 
         # input_dir="./results/ablation_base_num", 
         # input_dir="./results/lambda_k_ablation",
-        input_dir="./results/ablation_lr/",
-        output_csv="./results/final_tta_summary.csv", 
+        # input_dir="./results/ablation_lr/",
+        input_dir="./results/ablation_lambda/",
+        # input_dir="/sharedata/wyc/dzs/TSTTA_Codebook/results/Dual_InDomain2",
+        # output_csv="/sharedata/wyc/dzs/TSTTA_Codebook/results/Dual_InDomain2/final_tta_summary.csv", 
         # output_csv="/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125/final_tta_summary.csv",
+        output_csv="./results/final_tta_summary.csv",
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTm2_2_ETTm1"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
-        dataset_names=['ETTh1_2_ETTh2', 'ETTh1', 'ETTm2', "ETTm2_2_ETTm1","ETTh2", "ETTh2_2_ETTh1", "exchange_rate", "weather"],
+        # dataset_names=['ETTh1_2_ETTh2', 'ETTh1', 'ETTm2', "ETTm2_2_ETTm1","ETTh2", "ETTh2_2_ETTh1"],
+        dataset_names=['ETTh1', 'ETTh1_2_ETTh2'],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
