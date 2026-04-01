@@ -680,8 +680,8 @@ def visualize_knowledge_vectors(adapter, save_dir="./vis_results", max_vars=10):
             # 计算上三角的均值（排除对角线的自身相似度 1.0）
             if n_bases > 1:
                 idx = np.triu_indices(n_bases, k=1)
-                mean_sim_k = np.mean(sim_matrix_k[idx])
-                mean_sim_v = np.mean(sim_matrix_v[idx])
+                mean_sim_k = np.mean(np.abs(sim_matrix_k[idx]))
+                mean_sim_v = np.mean(np.abs(sim_matrix_v[idx]))
             else:
                 mean_sim_k = 1.0
                 mean_sim_v = 1.0

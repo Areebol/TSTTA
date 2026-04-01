@@ -2770,30 +2770,59 @@ class CoBA_TF_Adapter(nn.Module):
         Channel-Specific Retrieval Logic
         """
         batch_size = y_base.shape[0]
-        # 1. 获取 Query: (B, V, D)
-        query = self._get_query(x, y_base) 
+        
+        
+        if self.online_mode:
+            with torch.no_grad():
+                # 1. 获取 Query: (B, V, D)
+                query = self._get_query(x, y_base) 
 
-        # --- Static Retrieval ---
-        # Query: (B, V, D)
-        # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
-        # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
-        
-        # Einsum 解析:
-        # bvd: batch, var, dim
-        # vnd: var, static_idx, dim
-        # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
-        sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
-        
-        w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
-        
-        # Correction:
-        # w_static: (B, V, N)
-        # Values:   (V, N, H)
-        # -> bvh: batch, var, horizon (输出修正量)
-        delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
-        
-        # Transpose output to match y_base (B, H, V)
-        delta_static = delta_static.permute(0, 2, 1)
+                # --- Static Retrieval ---
+                # Query: (B, V, D)
+                # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
+                # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
+                
+                # Einsum 解析:
+                # bvd: batch, var, dim
+                # vnd: var, static_idx, dim
+                # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
+                sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
+                
+                w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+                
+                # Correction:
+                # w_static: (B, V, N)
+                # Values:   (V, N, H)
+                # -> bvh: batch, var, horizon (输出修正量)
+                delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+                
+                # Transpose output to match y_base (B, H, V)
+                delta_static = delta_static.permute(0, 2, 1)
+        else:
+            # 1. 获取 Query: (B, V, D)
+                query = self._get_query(x, y_base) 
+
+                # --- Static Retrieval ---
+                # Query: (B, V, D)
+                # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
+                # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
+                
+                # Einsum 解析:
+                # bvd: batch, var, dim
+                # vnd: var, static_idx, dim
+                # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
+                sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
+                
+                w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+                
+                # Correction:
+                # w_static: (B, V, N)
+                # Values:   (V, N, H)
+                # -> bvh: batch, var, horizon (输出修正量)
+                delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+                
+                # Transpose output to match y_base (B, H, V)
+                delta_static = delta_static.permute(0, 2, 1)
 
         # --- Online Adapter ---
         if self.online_mode and x is not None:

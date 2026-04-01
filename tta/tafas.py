@@ -172,8 +172,12 @@ class Adapter(nn.Module):
         for idx, inputs in enumerate(self.test_loader):
             if hasattr(self.test_loader.dataset, "csv_files"):
                 print(f'Processing test sample {idx+1}/{len(self.test_loader.dataset.csv_files)}', end='\r')
-
+            
+            
             enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
+            # print(f'enc_window_all shape: {enc_window_all.shape}, enc_window_stamp_all shape: {enc_window_stamp_all.shape}, dec_window_all shape: {dec_window_all.shape}, dec_window_stamp_all shape: {dec_window_stamp_all.shape}')
+
+            breakpoint()
             batch_start = 0
             batch_end = 0
             batch_idx = 0

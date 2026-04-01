@@ -187,7 +187,9 @@ class PatchEmbedding(nn.Module):
         # do patching
         n_vars = x.shape[1]
         x = self.padding_patch_layer(x)
-        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        # x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        # Use an explicit non-negative dim for better NPU backward compatibility.
+        x = x.unfold(dimension=x.dim() - 1, size=self.patch_len, step=self.stride)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         # Input encoding
         x = self.value_embedding(x) + self.position_embedding(x)
