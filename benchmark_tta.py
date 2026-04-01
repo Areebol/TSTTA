@@ -136,8 +136,16 @@ def custom_adapt(self, enc_window_all, enc_window_stamp_all, dec_window_all, dec
         else:
             pred, ground_truth = self._adapt_with_partial_ground_truth(batch_inputs, period, batch_size, batch_idx)
         
-        is_dynatta = str(getattr(self.cfg.TTA, 'METHOD', '')).upper() == 'DYNATTA'
-        if is_dynatta:
+        method_name = str(getattr(self.cfg.TTA, 'METHOD', '')).upper()
+        is_dynatta = method_name == 'DYNATTA'
+        is_coba = method_name == 'COBA'
+
+        if is_coba and hasattr(self, 'cali') and hasattr(self.cali, 'output_calibration'):
+            # For COBA, skip extra forecast in adjust stage and only apply output calibration.
+            pred_after_adapt = self.cali.output_calibration(pred, batch_inputs[0])
+            for i in range(batch_size - 1):
+                pred[i, period - i:] = pred_after_adapt[i, period - i:]
+        elif is_dynatta:
             def _build_dynatta_metrics(ref_tensor):
                 # DynaTTA DynamicGCM expects metric feature dimension = 3
                 return torch.zeros((ref_tensor.shape[0], 3), device=ref_tensor.device, dtype=ref_tensor.dtype)
@@ -255,16 +263,16 @@ def custom_partial_ground_truth_inference(self, inputs, period, batch_size, batc
 
     return pred, ground_truth
 
-def run_benchmark():
+def run_benchmark(MODEL_NAME="DLinear"):
     set_seeds(1)
     
-    MODEL_NAME = "DLinear"
+    # MODEL_NAME = "DLinear"
     # MODEL_NAME = "PatchTST"
     DATASET_NAME = "ETTh1"
     PRED_LENS =[96, 192, 336, 720]
     # PRED_LENS =[96]
     NUM_SAMPLES = 64
-    NUM_BENCH_RUNS = 100
+    NUM_BENCH_RUNS = 1000
     NUM_WARMUP_RUNS = 10
     
     RESULT_FILE = f"./results/benchmark_tta/{MODEL_NAME}_{DATASET_NAME}_performance.csv"
@@ -277,7 +285,7 @@ def run_benchmark():
     methods = {
         "TAFAS": tafas.build_adapter,
         "PETSA": petsa.build_adapter,
-        "DynaTTA": dynatta.build_adapter,
+        # "DynaTTA": dynatta.build_adapter,
         "COBA": coba.build_adapter
     }
 
@@ -363,15 +371,14 @@ def run_benchmark():
                 if hasattr(torch, 'npu') and torch.npu.is_available():
                     torch.npu.synchronize()
 
-                run_durations = []
+                start_t = time.time()
                 for _ in range(NUM_BENCH_RUNS):
-                    start_t = time.time()
                     # 直接传处理后的数据，避免内部各种 I/O 操作及数据搬迁
                     adapter.adapt(*prepared_inputs)
                     if hasattr(torch, 'npu') and torch.npu.is_available():
                         torch.npu.synchronize()
-                    end_t = time.time()
-                    run_durations.append(end_t - start_t)
+                end_t = time.time()
+                run_durations = end_t - start_t
                 
                 if hasattr(torch, 'npu') and torch.npu.is_available():
                     peak_mem = torch.npu.max_memory_allocated() / (1024 * 1024)
@@ -379,7 +386,7 @@ def run_benchmark():
                     peak_mem = 0.0
                 
                 # 计算指标
-                avg_duration = float(np.mean(run_durations))
+                avg_duration = float(run_durations / NUM_BENCH_RUNS)
                 throughput = in_mem_test.total_samples / avg_duration
                 
                 # 获取整个 adapter 的参数量，并计算相对于基座增加的参数
@@ -405,4 +412,5 @@ def run_benchmark():
     print(f"\n✅ All Finished! Data saved to {RESULT_FILE}")
 
 if __name__ == "__main__":
-    run_benchmark()
+    run_benchmark('DLinear')
+    run_benchmark('PatchTST')
