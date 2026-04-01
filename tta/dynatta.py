@@ -17,6 +17,7 @@ from utils.misc import prepare_inputs
 from config import get_norm_method
 import matplotlib.pyplot as plt
 from tta.utils import save_tta_results
+from tta.loss import stable_complex_abs
 
 
 class DynaTTAAdapter(nn.Module):
@@ -709,7 +710,8 @@ class DynaTTAAdapter(nn.Module):
 
     def _calc_period(self, enc0):
         fft = torch.fft.rfft(enc0 - enc0.mean(0), dim=0)
-        amp = fft.abs(); pw = amp.pow(2).mean(0)
+        # amp = fft.abs(); pw = amp.pow(2).mean(0)
+        amp = stable_complex_abs(fft); pw = amp.pow(2).mean(0)
         try:
             per = enc0.shape[0] // fft[:, pw.argmax()].argmax().item()
         except:

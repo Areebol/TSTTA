@@ -350,9 +350,10 @@ class Adapter(nn.Module):
                 
                 self._switch_model_to_train()
 
-                if self.cali.input_calibration is not None:
-                    inputs_history = self.cali.input_calibration(inputs_history)
-                pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
+                with torch.no_grad():
+                    if self.cali.input_calibration is not None:
+                        inputs_history = self.cali.input_calibration(inputs_history)
+                    pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
@@ -396,9 +397,10 @@ class Adapter(nn.Module):
         for _ in range(self.cfg.TTA.DUAL.STEPS):
             self.n_adapt += 1
             
-            if self.cali.input_calibration is not None:
-                inputs = self.cali.input_calibration(inputs)
-            pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+            with torch.no_grad():
+                if self.cali.input_calibration is not None:
+                    inputs = self.cali.input_calibration(inputs)
+                pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
                 if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
