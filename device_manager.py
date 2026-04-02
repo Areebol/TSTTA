@@ -14,3 +14,4 @@ def get_device():
         return torch.device("cpu")
     
 global_device = get_device()
+# global_device = "cpu"
