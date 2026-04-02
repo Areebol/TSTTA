@@ -271,11 +271,11 @@ class Adapter(nn.Module):
         self.mse_per_var_all = []
         self.n_adapt = 0
 
-        from tta.tta_dual_utils.npu_profiler import synchronize_device, record_performance, reset_memory_stats, get_peak_memory_mb
-        total_compute_duration = 0.0
-        global_peak_memory_mb = 0.0
-        total_samples_processed = 0
-        print(f"[Calculate-TAFAS] Synchronizing device for throughput measurement...")
+        # from tta.tta_dual_utils.npu_profiler import synchronize_device, record_performance, reset_memory_stats, get_peak_memory_mb
+        # total_compute_duration = 0.0
+        # global_peak_memory_mb = 0.0
+        # total_samples_processed = 0
+        # print(f"[Calculate-TAFAS] Synchronizing device for throughput measurement...")
 
         print(f"CSV files to adapt and evaluate on EVED dataset using {num_csv} files.")
         for csv_idx in range(num_csv):
@@ -303,9 +303,9 @@ class Adapter(nn.Module):
                 self.cur_step = self.cfg.DATA.SEQ_LEN - 2
                 is_last = False
 
-                synchronize_device()
-                reset_memory_stats()
-                t0 = time.time() 
+                # synchronize_device()
+                # reset_memory_stats()
+                # t0 = time.time() 
 
                 while batch_end < len(enc_window_all):
                     enc_window_first = enc_window_all[batch_start]
@@ -349,20 +349,20 @@ class Adapter(nn.Module):
 
                     batch_start = batch_end
                     batch_idx += 1
-                    total_samples_processed += batch_size
+                    # total_samples_processed += batch_size
                 
-                synchronize_device()
-                t1 = time.time()
-                total_compute_duration += (t1 - t0)
+                # synchronize_device()
+                # t1 = time.time()
+                # total_compute_duration += (t1 - t0)
 
-                current_peak_mb = get_peak_memory_mb()
-                global_peak_memory_mb = max(global_peak_memory_mb, current_peak_mb)
+                # current_peak_mb = get_peak_memory_mb()
+                # global_peak_memory_mb = max(global_peak_memory_mb, current_peak_mb)
 
             # 当前 路径 完成后，重置模型/优化器，以防影响下一个 CSV
             if self.cfg.TTA.RESET: self.reset()
             self.switch_model_to_eval()
 
-        record_performance(self.cfg, self, total_compute_duration, total_samples_processed, global_peak_memory_mb)
+        # record_performance(self.cfg, self, total_compute_duration, total_samples_processed, global_peak_memory_mb)
 
         self.mse_all = np.concatenate(self.mse_all) if self.mse_all else np.array([])
         self.mae_all = np.concatenate(self.mae_all) if self.mae_all else np.array([])

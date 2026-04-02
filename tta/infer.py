@@ -155,7 +155,6 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'Freq_Add_Adapter': Freq_Add_Adapter, 
         'CoBA_TF_Adapter': CoBA_TF_Adapter,
         'PKA_GCM': PKA_GCM,
-        'linear': Linear_Adapter,
     }
 
     ModelClass = constructors.get(model_type)
@@ -288,7 +287,7 @@ class Adapter(nn.Module):
         )
 
         # 判断条件增加 Freq_Add_Adapter
-        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM, Linear_Adapter)):
+        if isinstance(self.cali.out_cali, (CoBA_GCM, CoBA_low_rank_GCM, Auxiliary_GCM, CoBA_low_rank_FreqAdapter, CoBA_FreqDomain_GCM, CoBA_FreqDomain_ElementWise_GCM, RoCoBA_FreqDomain_GCM, EnCoBA_FreqDomain_GCM, RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
             self._pretrain_adapter()
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED 
             
@@ -433,9 +432,10 @@ class Adapter(nn.Module):
                 
                 self._switch_model_to_train()
 
-                if self.cali.input_calibration is not None:
-                    inputs_history = self.cali.input_calibration(inputs_history)
-                pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
+                with torch.no_grad():
+                    if self.cali.input_calibration is not None:
+                        inputs_history = self.cali.input_calibration(inputs_history)
+                    pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
                 
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
@@ -487,9 +487,10 @@ class Adapter(nn.Module):
         for _ in range(self.cfg.TTA.DUAL.STEPS):
             self.n_adapt += 1
             
-            if self.cali.input_calibration is not None:
-                inputs = self.cali.input_calibration(inputs)
-            pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+            with torch.no_grad():
+                if self.cali.input_calibration is not None:
+                    inputs = self.cali.input_calibration(inputs)
+                pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         
             if self.cali.output_calibration is not None:
                 if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
@@ -531,19 +532,15 @@ class Adapter(nn.Module):
 
     @torch.no_grad()
     def _adjust_prediction(self, pred, inputs, batch_size, period):
-        if self.cali.input_calibration is not None:
-            inputs = self.cali.input_calibration(inputs)
-        pred_after_adapt, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
         if self.cali.output_calibration is not None:
             if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                 enc_window = prepare_inputs(inputs)[0]
-                # pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
                 idx = self.cfg.DATA.TARGET_START_IDX
                 c_out = self.cfg.MODEL.c_out
                 enc_target = enc_window[:, :, idx : idx + c_out]
-                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_target)
+                pred_after_adapt = self.cali.output_calibration(pred, enc_target)
             else:
-                pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
+                pred_after_adapt = self.cali.output_calibration(pred)
         
         for i in range(batch_size-1):
             pred[i, period-i:] = pred_after_adapt[i, period-i:]
@@ -715,14 +712,14 @@ def build_adapter(cfg, model, norm_module=None):
     adapter = Adapter(cfg, model, norm_module)
     return adapter
 
-
+# [修改 7] 更新可视化函数的命名和打印信息，以兼容新老模块
 def visualize_knowledge_vectors(adapter, save_dir="./vis_results", max_vars=10):
     """
     可视化 Freq_Add_Adapter (或 CoBA) 中通道的知识向量，并为每个通道单独保存一张图。
     """
     adapter.eval() 
-    n_bases = getattr(adapter, 'n_bases', getattr(adapter, 'n_static', 0))
-    n_var = getattr(adapter, 'n_var', 1)
+    n_bases = adapter.n_bases
+    n_var = adapter.n_var
     
     plot_vars = min(n_var, max_vars)
     if n_var > max_vars:
@@ -734,59 +731,38 @@ def visualize_knowledge_vectors(adapter, save_dir="./vis_results", max_vars=10):
 
     with torch.no_grad():
         for v in range(plot_vars):
-            if hasattr(adapter, 'static_keys') and hasattr(adapter, 'static_values'):
-                # For CoBA_TF_Adapter: entirely in time-domain
-                keys = adapter.static_keys[v]
-                keys_norm = F.normalize(keys, p=2, dim=-1)
-                sim_matrix_k = torch.matmul(keys_norm, keys_norm.T).cpu().numpy()
+            # ==========================================
+            # 1. Keys (k) 相似度矩阵
+            # ==========================================
+            keys = adapter.codebook_keys[v] # (n_bases, feature_dim)
+            keys_norm = F.normalize(keys, p=2, dim=-1)
+            sim_matrix_k = torch.matmul(keys_norm, keys_norm.T).cpu().numpy()
 
-                time_domain_bases = adapter.static_values[v]
-                values_norm = F.normalize(time_domain_bases, p=2, dim=-1)
-                sim_matrix_v = torch.matmul(values_norm, values_norm.T).cpu().numpy()
-                time_domain_bases = time_domain_bases.cpu().numpy()
+            # ==========================================
+            # 2. Values (v) 频域相似度矩阵
+            # ==========================================
+            if adapter.var_wise:
+                b_r = adapter.bases_r[:, :, v] # (n_bases, freq_len)
+                b_i = adapter.bases_i[:, :, v]
             else:
-                # ==========================================
-                # 1. Keys (k) 相似度矩阵
-                # ==========================================
-                keys = adapter.codebook_keys[v] # (n_bases, feature_dim)
-                keys_norm = F.normalize(keys, p=2, dim=-1)
-                sim_matrix_k = torch.matmul(keys_norm, keys_norm.T).cpu().numpy()
+                b_r = adapter.bases_r
+                b_i = adapter.bases_i
+                
+            complex_bases = torch.complex(b_r, b_i)
+            mag = stable_complex_abs(complex_bases)
+            mag_norm = F.normalize(mag, p=2, dim=-1)
+            sim_matrix_v = torch.matmul(mag_norm, mag_norm.T).cpu().numpy()
 
-                # ==========================================
-                # 2. Values (v) 频域相似度矩阵
-                # ==========================================
-                if getattr(adapter, 'var_wise', False):
-                    b_r = adapter.bases_r[:, :, v] # (n_bases, freq_len)
-                    b_i = adapter.bases_i[:, :, v]
-                else:
-                    b_r = adapter.bases_r
-                    b_i = adapter.bases_i
-                    
-                complex_bases = torch.complex(b_r, b_i)
-                mag = stable_complex_abs(complex_bases)
-                mag_norm = F.normalize(mag, p=2, dim=-1)
-                sim_matrix_v = torch.matmul(mag_norm, mag_norm.T).cpu().numpy()
-
-                # ==========================================
-                # 3. Values (v) 转换回时域波形
-                # ==========================================
-                time_domain_bases = torch.fft.irfft(complex_bases, n=adapter.window_len, dim=-1).cpu().numpy()
+            # ==========================================
+            # 3. Values (v) 转换回时域波形
+            # ==========================================
+            time_domain_bases = torch.fft.irfft(complex_bases, n=adapter.window_len, dim=-1).cpu().numpy()
 
             # ==========================================
             # 开始为当前变量 v 单独创建画布和绘图
             # ==========================================
-            
-            # 计算上三角的均值（排除对角线的自身相似度 1.0）
-            if n_bases > 1:
-                idx = np.triu_indices(n_bases, k=1)
-                mean_sim_k = np.mean(sim_matrix_k[idx])
-                mean_sim_v = np.mean(sim_matrix_v[idx])
-            else:
-                mean_sim_k = 1.0
-                mean_sim_v = 1.0
-                
             fig, axes = plt.subplots(1, 3, figsize=(20, 5))
-            fig.suptitle(f'Knowledge Vectors Analysis - Var {v} (N_bases: {n_bases})\nMean Sim (Keys): {mean_sim_k:.4f} | Mean Sim (Values): {mean_sim_v:.4f}', fontsize=16)
+            fig.suptitle(f'Knowledge Vectors Analysis - Var {v} (N_bases: {n_bases})', fontsize=16)
 
             # 图 1: Keys
             sns.heatmap(sim_matrix_k, ax=axes[0], cmap='coolwarm', vmin=-1, vmax=1, 
@@ -795,13 +771,10 @@ def visualize_knowledge_vectors(adapter, save_dir="./vis_results", max_vars=10):
             axes[0].set_xlabel('Base Index')
             axes[0].set_ylabel('Base Index')
 
-            # 图 2: Values
+            # 图 2: Values 频域
             sns.heatmap(sim_matrix_v, ax=axes[1], cmap='viridis', vmin=-1, vmax=1, 
                         annot=False, fmt=".2f", square=True)
-            if hasattr(adapter, 'static_keys') and hasattr(adapter, 'static_values'):
-                axes[1].set_title(f'Var {v} - Values (Time) Similarity')
-            else:
-                axes[1].set_title(f'Var {v} - Values (Freq Mag) Similarity')
+            axes[1].set_title(f'Var {v} - Values (Freq Mag) Similarity')
             axes[1].set_xlabel('Base Index')
             axes[1].set_ylabel('Base Index')
 

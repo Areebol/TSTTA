@@ -2770,30 +2770,59 @@ class CoBA_TF_Adapter(nn.Module):
         Channel-Specific Retrieval Logic
         """
         batch_size = y_base.shape[0]
-        # 1. 获取 Query: (B, V, D)
-        query = self._get_query(x, y_base) 
+        
+        
+        if self.online_mode:
+            with torch.no_grad():
+                # 1. 获取 Query: (B, V, D)
+                query = self._get_query(x, y_base) 
 
-        # --- Static Retrieval ---
-        # Query: (B, V, D)
-        # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
-        # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
-        
-        # Einsum 解析:
-        # bvd: batch, var, dim
-        # vnd: var, static_idx, dim
-        # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
-        sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
-        
-        w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
-        
-        # Correction:
-        # w_static: (B, V, N)
-        # Values:   (V, N, H)
-        # -> bvh: batch, var, horizon (输出修正量)
-        delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
-        
-        # Transpose output to match y_base (B, H, V)
-        delta_static = delta_static.permute(0, 2, 1)
+                # --- Static Retrieval ---
+                # Query: (B, V, D)
+                # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
+                # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
+                
+                # Einsum 解析:
+                # bvd: batch, var, dim
+                # vnd: var, static_idx, dim
+                # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
+                sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
+                
+                w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+                
+                # Correction:
+                # w_static: (B, V, N)
+                # Values:   (V, N, H)
+                # -> bvh: batch, var, horizon (输出修正量)
+                delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+                
+                # Transpose output to match y_base (B, H, V)
+                delta_static = delta_static.permute(0, 2, 1)
+        else:
+            # 1. 获取 Query: (B, V, D)
+                query = self._get_query(x, y_base) 
+
+                # --- Static Retrieval ---
+                # Query: (B, V, D)
+                # Keys:  (V, N, D)  <-- 注意这里 V 在 dim 0
+                # 我们希望: Batch B 中的 变量 V，去匹配 Keys 中的 变量 V 的 N 个 Key
+                
+                # Einsum 解析:
+                # bvd: batch, var, dim
+                # vnd: var, static_idx, dim
+                # -> bvn: batch, var, static_idx (每个变量得到了对自己 Memory 的相似度)
+                sim_static = torch.einsum('bvd, vnd -> bvn', query, F.normalize(self.static_keys, p=2, dim=-1))
+                
+                w_static = F.softmax(self.temperature * sim_static, dim=-1) # (B, V, N)
+                
+                # Correction:
+                # w_static: (B, V, N)
+                # Values:   (V, N, H)
+                # -> bvh: batch, var, horizon (输出修正量)
+                delta_static = torch.einsum('bvn, vnh -> bvh', w_static, self.static_values)
+                
+                # Transpose output to match y_base (B, H, V)
+                delta_static = delta_static.permute(0, 2, 1)
 
         # --- Online Adapter ---
         if self.online_mode and x is not None:
@@ -2835,3 +2864,51 @@ class CoBA_TF_Adapter(nn.Module):
         else:
             params.append(self.temp_params)
         return params
+
+class Linear_Adapter(nn.Module):
+    """
+    带有门控残差连接的线性 Adapter (Gated Residual Linear Adapter)
+    公式: Y = X + tanh(gating) * (W * X + b)
+    说明: 这等价于 TAFAS (GCM) 的核心逻辑，是极其稳定的 TTA Baseline。
+    """
+    def __init__(self, window_len, n_var=1, var_wise=True, gating_init=0.01, **kwargs):
+        super(Linear_Adapter, self).__init__()
+        self.window_len = window_len
+        self.n_var = n_var
+        self.var_wise = True
+        self.online_mode = False 
+        
+        # 1. 权重初始化为全 0 (因为有残差连接，初始 delta 设为 0 最安全)
+        if var_wise:
+            self.weight = nn.Parameter(torch.zeros(window_len, window_len, n_var))
+        else:
+            self.weight = nn.Parameter(torch.zeros(window_len, window_len))
+            
+        self.bias = nn.Parameter(torch.zeros(window_len, n_var))
+        
+        # 2. 增加门控参数 (Gating)，初始化为极小值(如 0.01)
+        # 这确保了初始的 tanh(gating) 接近于 0，极大限制了由于 TTA 数据极少带来的初期剧烈波动
+        self.gating = nn.Parameter(gating_init * torch.ones(n_var))
+        self.temp_params = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x, *args, **kwargs):
+        """
+        x shape: (Batch, Window_len, N_var)
+        """
+        # 1. 计算线性修正量 delta
+        if self.var_wise:
+            delta = torch.einsum('biv,iov->bov', x, self.weight) + self.bias
+        else:
+            delta = torch.einsum('biv,io->bov', x, self.weight) + self.bias
+            
+        # 2. 门控残差连接：利用 tanh(gating) 控制修正量流出的幅度
+        # 并且 tanh 会将门控系数严格限制在 (-1, 1) 之间，防止梯度爆炸
+        out = x + (self.gating) * delta 
+        
+        return out
+
+    def get_optim_params(self):
+        # 注意：一定要把 gating 也加进优化器，让模型自适应学习“要不要相信当前的线性修正”
+        if self.online_mode is False: 
+            return [self.temp_params]
+        return [self.weight, self.bias, self.gating]

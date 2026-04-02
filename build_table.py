@@ -13,7 +13,7 @@ def excel_colname(n):
 
 # --- 修改点 1: 在函数定义中增加了 model_names 参数 ---
 def build_summary_table(input_dir, output_csv, dataset_names=None, model_names=None):
-    csv_files = glob.glob(os.path.join(input_dir, "*.csv"))
+    csv_files = glob.glob(os.path.join(input_dir, "*.csv"), recursive=False)
     if not csv_files:
         print(f"No CSV files found in {input_dir}")
         return
@@ -207,21 +207,25 @@ if __name__ == "__main__":
         os.makedirs("./results", exist_ok=True)
         
     build_summary_table(
-        input_dir="./results/", 
-        # input_dir='/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125',
-        output_csv="./results/final_tta_summary.csv", 
-        # output_csv="/wenzhiquan/dengzeshuai/codes/TSTTA_COBA/results/transfer_results_260125/final_tta_summary.csv",
+        # input_dir="/sharedata/wyc/code/TSTTA_Codebook/results/0329_COBA2/10_2_455", 
+        input_dir='/sharedata/wyc/code/TSTTA_Codebook/results/0401/eVED/455_2_10/2CoBAiTransformerPCD/',
+        # input_dir='./results',
+
+        # output_csv="/sharedata/wyc/code/TSTTA_Codebook/results/0329_COBA2/10_2_455/final_tta_summary.csv", 
+        # output_csv="/sharedata/wyc/code/TSTTA_Codebook/results/Dual_InDomain2/final_tta_summary.csv",
+        output_csv="/sharedata/wyc/code/TSTTA_Codebook/results/0401/eVED/455_2_10/2CoBAiTransformerPCD/final_tta_summary.csv",
         
         # 1. 筛选数据集
         # dataset_names=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "exchange_rate", "weather"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTm2_2_ETTm1"],
         # dataset_names=["ETTh1_2_ETTh2", "ETTh2_2_ETTh1", "ETTm1_2_ETTm2", "ETTm2_2_ETTm1"],
-        dataset_names=['ETTh1'],
+        dataset_names=['eVED_2_eVED'],
+        # dataset_names=['exchange_rate'],
         # dataset_names=None,
         
         # 2. 筛选模型 (可以是列表，也可以是单个字符串)
         # model_names=["DLinear", "PatchTST", "FreTS", "iTransformer", "MICN", "OLS"], 
-        model_names=["PatchTST", "DLinear"]
-        # model_names=["DLinear", "iTransformer"]
+        # model_names=["PatchTSTPCD", "DLinearPCD", "FreTSPCD", "iTransformerPCD", "MICNPCD", "OLSPCD"],
+        model_names=["iTransformerPCD"]
         # model_names=None # 设为 None 则显示所有模型
     )
