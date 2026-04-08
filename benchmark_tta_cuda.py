@@ -11,7 +11,7 @@ import torch.nn.functional as F
 # 导入项目配置和工具
 from config import get_cfg_defaults
 # from device_manager import global_device
-global_device = "cpu"
+global_device = "cuda" if torch.cuda.is_available() else "cpu"
 from utils.misc import set_seeds, prepare_inputs
 from models.build import build_model
 from models.forecast import forecast
@@ -271,10 +271,10 @@ def run_benchmark(MODEL_NAME="DLinear"):
     # MODEL_NAME = "PatchTST"
     DATASET_NAME = "ETTh1"
     # PRED_LENS =[96, 192, 336, 720]
-    PRED_LENS =[96, 192, 336, 720]
+    # PRED_LENS =[96, 192, 336, 720]
     # PRED_LENS =[96]
     # PRED_LENS =[192]
-    # PRED_LENS = [336, 720]
+    PRED_LENS = [336, 720]
     NUM_SAMPLES = 32
     NUM_BENCH_RUNS = 100
     NUM_WARMUP_RUNS = 10
@@ -292,6 +292,12 @@ def run_benchmark(MODEL_NAME="DLinear"):
         # "DynaTTA": dynatta.build_adapter,
         # "COBA": coba.build_adapter
     }
+
+    use_cuda = global_device.startswith("cuda")
+    if use_cuda:
+        print(f"[*] CUDA benchmark enabled on device: {torch.cuda.get_device_name(0)}")
+    else:
+        print("[WARN] CUDA not available, fallback to CPU. Throughput/memory are not CUDA metrics.")
 
     print(f"\n🚀 STARTING ACADEMIC BENCHMARK: {MODEL_NAME} on {DATASET_NAME}")
 
@@ -363,18 +369,33 @@ def run_benchmark(MODEL_NAME="DLinear"):
                 # 正式计时前先预热，避免首次执行开销污染统计
                 for _ in range(NUM_WARMUP_RUNS):
                     adapter.adapt(*prepared_inputs)
+                if use_cuda:
+                    torch.cuda.synchronize()
 
-                start_t = time.time()
+                if use_cuda:
+                    torch.cuda.synchronize()
+                start_t = time.perf_counter()
                 peak_mems = []
                 for _ in range(NUM_BENCH_RUNS):
+                    if use_cuda:
+                        torch.cuda.reset_peak_memory_stats()
+
                     # 直接传处理后的数据，避免内部各种 I/O 操作及数据搬迁
                     adapter.adapt(*prepared_inputs)
-                    peak_mem = 0.0
+
+                    if use_cuda:
+                        torch.cuda.synchronize()
+                        peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                    else:
+                        peak_mem = 0.0
+
                     peak_mems.append(peak_mem)
-                end_t = time.time()
+                if use_cuda:
+                    torch.cuda.synchronize()
+                end_t = time.perf_counter()
                 run_durations = end_t - start_t
                 
-                peak_mem = 0.0
+                avg_peak_mem = sum(peak_mems) / NUM_BENCH_RUNS if peak_mems else 0.0
                 
                 # 计算指标
                 avg_duration = float(run_durations / NUM_BENCH_RUNS)
@@ -388,10 +409,10 @@ def run_benchmark(MODEL_NAME="DLinear"):
                     print(f"     [WARN] Adapter params ({adapter_total}) less than base model ({base_params_num}), showing total params.")
                     params_k = adapter_total / 1e3
                 
-                print(f"     [OK] Speed: {throughput:.2f} samples/s (avg over {NUM_BENCH_RUNS} runs) | Mem: {sum(peak_mems)/NUM_BENCH_RUNS:.2f} MB | Params: {params_k:.2f} K")
+                print(f"     [OK] Speed: {throughput:.2f} samples/s (avg over {NUM_BENCH_RUNS} runs) | Mem: {avg_peak_mem:.2f} MB | Params: {params_k:.2f} K")
                 
                 with open(RESULT_FILE, mode='a', newline='') as f:
-                    csv.writer(f).writerow([MODEL_NAME, method_name, p_len, f"{params_k:.2f}", f"{sum(peak_mems)/NUM_BENCH_RUNS:.2f}", f"{throughput:.2f}"])
+                    csv.writer(f).writerow([MODEL_NAME, method_name, p_len, f"{params_k:.2f}", f"{avg_peak_mem:.2f}", f"{throughput:.2f}"])
             
             except Exception as e:
                 print(f"     [ERR] {method_name} failed:")
