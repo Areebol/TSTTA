@@ -30,24 +30,24 @@ DEFAULT_LABEL_FONTSIZE = 50.0
 
 DEFAULT_LEGEND_FONTSIZE = 50.0
 
-# 图例区域高度倍数
-LEGEND_HEIGHT_MULT = 3.2
+# 图例区域高度倍数 (调小可降低图例框的高度，原来是 3.2)
+LEGEND_HEIGHT_MULT = 2.0
 
 # 图例边框颜色和粗细
 LEGEND_BOX_BORDER_RGB = (0.65, 0.65, 0.65)
 LEGEND_BOX_BORDER_WIDTH = 2
 
 # 图例内容样式
-LEGEND_LINE_LEN_MULT = 1.6
-LEGEND_ITEM_GAP_MULT = 1.1
+LEGEND_LINE_LEN_MULT = 3.0  # 增加了线段长度 (原为 1.6)
+LEGEND_ITEM_GAP_MULT = 2.5  # 增加了项与项之间的间距 (原为 1.1)
 LEGEND_LINE_WIDTH_MULT = 0.14
 LEGEND_LINE_WIDTH_MIN = 3.0
 
 # (color, label)
 LEGEND_ITEMS = [
     ("#000000", "Ground Truth"),
-    ("#0000FF", "Base Pred"),
-    ("#FF0000", "TTA Pred"),
+    ("#0000FF", "Base Prediction"),
+    ("#FF0000", "TTA Prediction (Ours)"),
 ]
 
 
@@ -217,23 +217,8 @@ def main() -> None:
     # 内容起始 x 坐标 (让内容在页面中间)
     content_x_start = (page_w - total_content_w) / 2
     
-    # 2. 绘制图例边框 (占页面宽度的 2/3)
-    legend_box_w = page_w * (2 / 3)
-    legend_box_x0 = (page_w - legend_box_w) / 2
-    legend_box_x1 = legend_box_x0 + legend_box_w
+    # 2. 绘制图例边框 (已根据需求去掉该框)
     
-    # 垂直方向居中于 margin 和 margin+legend_h 之间
-    # 稍微留一点内边距让框看起来舒服
-    box_padding_v = 5
-    box_y0 = margin + box_padding_v
-    box_y1 = margin + legend_h - box_padding_v
-
-    page.draw_rect(
-        fitz.Rect(legend_box_x0, box_y0, legend_box_x1, box_y1),
-        color=LEGEND_BOX_BORDER_RGB,
-        width=LEGEND_BOX_BORDER_WIDTH,
-    )
-
     # 3. 绘制图例内容
     line_width = max(LEGEND_LINE_WIDTH_MIN, font_size * LEGEND_LINE_WIDTH_MULT)
     # 计算文字基线 y 坐标：大致在图例区域的中间
