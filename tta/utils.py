@@ -72,7 +72,6 @@ class TTADataManager:
             "preds_base": [],
             "preds_tta": [],
             "gts": [],
-            "gating_weights": [],
             "mse_steps": []
         }
 
@@ -95,7 +94,6 @@ class TTADataManager:
             "preds_base": np.concatenate(self.storage["preds_base"], axis=0),
             "preds_tta": np.concatenate(self.storage["preds_tta"], axis=0),
             "gts": np.concatenate(self.storage["gts"], axis=0),
-            "gating": np.concatenate(self.storage["gating_weights"], axis=0),
             "mse": np.concatenate(self.storage["mse_steps"], axis=0) if self.storage["mse_steps"] else None
         }
 
