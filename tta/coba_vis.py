@@ -239,7 +239,11 @@ class Adapter(nn.Module):
             cfg, 
             enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
         )
-        self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
+
+        if self.cfg.TTA.DOMAIN_SHIFT:
+            self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-2-{cfg.DATA.DOMAIN_SHIFT_TARGET}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
+        else:
+            self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
 
     def _freeze_all(self):
         self.manager._freeze_all()

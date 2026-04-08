@@ -11,6 +11,17 @@ class TTAVisualizer:
         self.cfg = cfg
         # 设置绘图风格
         plt.style.use('seaborn-v0_8-muted')
+        
+        # 统一调大全局字体，解决横纵坐标及标签看不清的问题
+        plt.rcParams.update({
+            'font.size': 20,           
+            'axes.labelsize': 22,      
+            'axes.titlesize': 24,      
+            'xtick.labelsize': 20,     
+            'ytick.labelsize': 20,     
+            'legend.fontsize': 18,     
+            'lines.linewidth': 2.5     
+        })
 
         # --- 修改 1: 调整画幅比例为 1:4 (高:宽) ---
         self._fig_w = 16  # 设置宽度为 16
@@ -176,9 +187,10 @@ class TTAVisualizer:
 
         # 0 参考线
         ax1.axhline(y=0, color='black', linestyle='-', alpha=0.2)
-        ax1.set_xlabel("Test Samples / Steps")
-        ax1.set_ylabel("Gating Weight (λ)", color='#27ae60', fontsize=12)
-        ax1.tick_params(axis='y', labelcolor='#27ae60')
+        ax1.set_xlabel("Test Samples / Steps", fontsize=20)
+        ax1.set_ylabel("Gating Weight (λ)", color='#27ae60', fontsize=20)
+        ax1.tick_params(axis='y', labelcolor='#27ae60', labelsize=18)
+        ax1.tick_params(axis='x', labelsize=18)
         
         # 去掉网格
         # ax1.grid(True, alpha=0.2) 
@@ -201,8 +213,8 @@ class TTAVisualizer:
             else:
                 ax2.plot(x_gating, mse, color='#e74c3c', linewidth=1.5, alpha=0.6, label='MSE')
 
-            ax2.set_ylabel("Prediction Error (MSE)", color='#e74c3c', fontsize=12)
-            ax2.tick_params(axis='y', labelcolor='#e74c3c')
+            ax2.set_ylabel("Prediction Error (MSE)", color='#e74c3c', fontsize=20)
+            ax2.tick_params(axis='y', labelcolor='#e74c3c', labelsize=18)
             ax2.set_yscale('log') 
 
             self._axis_start_from_zero(ax2, x=True, y=False)
@@ -212,9 +224,9 @@ class TTAVisualizer:
             lines2, labels2 = ax2.get_legend_handles_labels()
             ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', frameon=True, framealpha=0.9)
         else:
-            ax1.legend(loc='upper left')
+            ax1.legend(loc='upper left', fontsize=18)
 
-        plt.title("Gating Evolution vs. Prediction Error", fontsize=14)
+        plt.title("Gating Evolution vs. Prediction Error", fontsize=24)
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_dir, "gating_vs_error.pdf"), bbox_inches='tight', dpi=150)
         plt.close()
@@ -350,7 +362,7 @@ class TTAVisualizer:
         self._set_nice_step_yaxis(ax1, y_stack, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
 
         if not is_best_improvement:
-            ax1.set_title(f"Prediction Comparison (Sample {sample_idx}, Var {channel})\n{title_suffix}", fontsize=13, pad=15)
+            ax1.set_title(f"Prediction Comparison (Sample {sample_idx}, Var {channel})\n{title_suffix}", fontsize=24, pad=15)
         
         # 去掉网格
         # ax1.grid(True, alpha=0.2) 
@@ -360,10 +372,10 @@ class TTAVisualizer:
             ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
             ax2.fill_between(range(len(y_delta)), y_delta, 0, color='#27ae60', alpha=0.1)
             
-            ax2.set_title("Adapter Contribution (TTA_Pred - Base_Pred)", fontsize=11)
-            ax2.set_ylabel("Adjustment Value")
-            ax2.set_xlabel("Time Step")
-            ax2.legend(loc='upper left', fontsize=9)
+            ax2.set_title("Adapter Contribution (TTA_Pred - Base_Pred)", fontsize=22)
+            ax2.set_ylabel("Adjustment Value", fontsize=20)
+            ax2.set_xlabel("Time Step", fontsize=20)
+            ax2.legend(loc='upper left', fontsize=18)
             
             # 去掉网格
             # ax2.grid(True, alpha=0.2)
@@ -415,9 +427,9 @@ class TTAVisualizer:
 
         ax1.axvline(x=seq_len - 1, color='#e74c3c', linestyle='-', linewidth=1.2, alpha=0.7)
         ax1.text(seq_len - 1, ax1.get_ylim()[1], ' Forecast Start ', color='#e74c3c', 
-                 ha='right', va='top', fontweight='bold', fontsize=10)
+                 ha='right', va='top', fontweight='bold', fontsize=18)
 
-        ax1.set_title(f"TTA Adaption Impact | Sample {sample_idx} | Channel {channel_idx}", fontsize=14)
+        ax1.set_title(f"TTA Adaption Impact | Sample {sample_idx} | Channel {channel_idx}", fontsize=24)
         
         # 去掉网格
         # ax1.grid(True, alpha=0.2)
@@ -433,9 +445,9 @@ class TTAVisualizer:
         ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
         ax2.axvline(x=seq_len - 1, color='#e74c3c', linestyle='-', alpha=0.2)
         
-        ax2.set_ylabel("Delta")
-        ax2.set_xlabel("Time Steps")
-        ax2.legend(loc='upper left', fontsize=9)
+        ax2.set_ylabel("Delta", fontsize=20)
+        ax2.set_xlabel("Time Steps", fontsize=20)
+        ax2.legend(loc='upper left', fontsize=18)
         
         # 去掉网格
         # ax2.grid(True, alpha=0.2)

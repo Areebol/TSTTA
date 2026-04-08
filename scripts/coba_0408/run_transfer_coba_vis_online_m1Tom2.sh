@@ -1,6 +1,6 @@
 #!/bin/bash
 # NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(2)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU

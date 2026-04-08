@@ -1,6 +1,6 @@
 #!/bin/bash
 # NPUS=(0 1 2 3 4 5 6 7)          # Available NPU IDs
-NPUS=(0 1 2 3)          # Available NPU IDs
+NPUS=(3)          # Available NPU IDs
 NNPU=${#NPUS[@]}        # Number of NPUs
 
 PER_NPU=4               # Parallel jobs per NPU
@@ -17,7 +17,7 @@ PAIRS=("ETTh1:ETTh2" "ETTh2:ETTh1" "ETTm1:ETTm2" "ETTm2:ETTm1" )
 # PAIRS=("ETTm2:ETTm1")
 # PAIRS=("ETTm2:ETTm1" "ETTh1:ETTh2")
 # PAIRS=("ETTh2:ETTh1")
-PAIRS=("ETTm1:ETTm2")
+PAIRS=("ETTm2:ETTm1")
 # PAIRS=("ETTh1:ETTh2")
 
 # PRED_LENS=(96 192 336 720)
@@ -33,8 +33,8 @@ BASE_NUMS=(32)
 # LRS=(0.0001 0.0005)
 # LRS=(0.0001)
 # LRS=(1e-5 1e-4 1e-3 1e-2 1e-1)
-OFFLINE_LRS=(0.00005)
-ONLINE_LRS=(0.01)
+OFFLINE_LRS=(0.01)
+ONLINE_LRS=(0.03)
 # SEEDS=(0 1 2 3 4)
 # SEEDS=(0 1 2)
 SEEDS=(0)
