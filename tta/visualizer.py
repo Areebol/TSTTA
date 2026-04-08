@@ -1,7 +1,9 @@
 import os
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from matplotlib.ticker import FuncFormatter, LinearLocator, LogLocator
 
 class TTAVisualizer:
     def __init__(self, save_dir, cfg):
@@ -10,6 +12,146 @@ class TTAVisualizer:
         # 设置绘图风格
         plt.style.use('seaborn-v0_8-muted')
 
+        # --- 修改 1: 调整画幅比例为 1:4 (高:宽) ---
+        self._fig_w = 16  # 设置宽度为 16
+        self._fig_h = self._fig_w / 4  # 高度为宽度的 1/4 (即 4.0)
+
+    def _figsize_custom(self, w: float | None = None):
+        w = self._fig_w if w is None else float(w)
+        return (w, w / 4)
+
+    def _set_yaxis_ticks(self, ax, n_ticks: int = 3):
+        """
+        通用辅助函数：用于那些没有使用 _set_nice_step_yaxis 的轴。
+        """
+        if ax is None:
+            return
+        n_ticks = int(n_ticks)
+        n_ticks = max(2, n_ticks)
+
+        scale = ax.get_yscale()
+        if scale == 'log':
+            ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=n_ticks))
+        else:
+            ax.yaxis.set_major_locator(LinearLocator(n_ticks))
+
+        # 强制保留 1 位小数
+        def _fmt_one_decimal(y, _pos=None):
+            if y is None or not np.isfinite(y):
+                return ""
+            return f"{float(y):.1f}"
+
+        ax.yaxis.set_major_formatter(FuncFormatter(_fmt_one_decimal))
+
+    def _set_nice_step_yaxis(
+        self,
+        ax,
+        y_data: np.ndarray,
+        *,
+        n_ticks: int = 3,
+        pad_frac: float = 0.1,  
+        force_zero_if_nonneg: bool = False, 
+    ):
+        """
+        设置Y轴：
+        1. 严格固定 3 个刻度（Min, Mid, Max）。
+        2. 刻度标签强制保留 1 位小数。
+        3. 上下留白，让曲线铺满，且不显示网格。
+        """
+        if ax is None or ax.get_yscale() == 'log':
+            return
+
+        y_arr = np.asarray(y_data)
+        try:
+            y_min = float(np.nanmin(y_arr))
+            y_max = float(np.nanmax(y_arr))
+        except ValueError:
+            return
+        if not (np.isfinite(y_min) and np.isfinite(y_max)):
+            return
+
+        # 处理数值完全相同的情况
+        if y_max == y_min:
+            span = max(abs(y_max), 1.0)
+            y_min -= 0.1 * span
+            y_max += 0.1 * span
+        
+        # 确定是否强制从 0 开始 (通常设为 False 以铺满画布)
+        if force_zero_if_nonneg and y_min >= 0:
+            if y_min < (y_max - y_min) * 0.5: 
+                y_min = 0.0
+
+        # 计算刻度 (Min, Mid, Max)，不强制对称
+        tick_min = y_min
+        tick_max = y_max
+        tick_mid = (tick_min + tick_max) / 2.0
+        
+        ticks = np.array([tick_min, tick_mid, tick_max])
+
+        # 设置 Y 轴显示范围 (Limits) - 加上留白
+        span = tick_max - tick_min
+        if span <= 1e-12:
+            span = 1.0
+        
+        pad = span * pad_frac
+        ylim_bottom = tick_min - pad
+        ylim_top = tick_max + pad
+
+        ax.set_ylim(ylim_bottom, ylim_top)
+        ax.set_yticks(ticks)
+
+        # 强制使用 1 位小数格式化
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _pos: f"{float(y):.1f}"))
+
+    def _set_ylim_with_padding(
+        self,
+        ax,
+        y_data: np.ndarray | None,
+        *,
+        bottom0_if_nonneg: bool = True,
+        pad_frac: float = 0.06,
+    ):
+        """根据数据设置 y 轴范围，并加一点上下 padding。"""
+        if ax is None or y_data is None:
+            return
+
+        if ax.get_yscale() == 'log':
+            return
+
+        y_arr = np.asarray(y_data)
+        try:
+            y_min = float(np.nanmin(y_arr))
+            y_max = float(np.nanmax(y_arr))
+        except ValueError:
+            return
+        if not (np.isfinite(y_min) and np.isfinite(y_max)):
+            return
+
+        span = y_max - y_min
+        if span <= 0:
+            span = max(abs(y_max), 1.0)
+
+        pad = max(span * float(pad_frac), 1e-9)
+
+        if bottom0_if_nonneg and y_min >= 0:
+            y_low = 0.0
+        else:
+            y_low = y_min - pad
+        y_high = y_max + pad
+
+        if y_high <= y_low:
+            y_high = y_low + 1.0
+
+        ax.set_ylim(y_low, y_high)
+
+    def _axis_start_from_zero(self, ax, *, x: bool = True, y: bool = True, y_data: np.ndarray | None = None):
+        """让 X 轴从 0 开始。"""
+        if ax is None:
+            return
+        if x:
+            ax.set_xlim(left=0)
+            ax.margins(x=0)
+
     def plot_all(self, data_dict):
         os.makedirs(self.save_dir, exist_ok=True)
         if data_dict is None:
@@ -17,52 +159,11 @@ class TTAVisualizer:
             return
 
         print(f"Visualizer: Generating plots in {self.save_dir}...")
-
-        self._plot_gating_strategy(data_dict['gating'], data_dict.get('mse', None))
-
-        if data_dict['mse'] is not None:
-            self._plot_error_analysis(data_dict['mse'])
-            
         self.plot_best_samples_per_channel(data_dict)
-        self.plot_worst_samples_per_channel(data_dict)
-        self.plot_sample_predictions(data_dict, sample_idx=1560)
-        self.plot_input_and_predictions(data_dict, sample_idx=1560, channel_idx=0, prefix="full_sequence")
-
-    def _plot_predictions(self, base, tta, gt, num_samples=3, start_idx=300,):
-        """对比 Ground Truth, 原始预测 和 TTA 后的预测"""
-        # base/tta/gt 形状: [Total_Samples, Pred_Len, Channels]
-        n_samples, pred_len, n_vars = gt.shape
-        samples_to_plot = min(num_samples + start_idx, n_samples)
-        
-        # 挑选典型的通道进行展示（例如第一个、中间一个、最后一个）
-        channels_to_plot = [0, n_vars // 2, n_vars - 1] if n_vars > 2 else range(n_vars)
-
-        for s_idx in range(start_idx, samples_to_plot):
-            for c_idx in channels_to_plot:
-                plt.figure(figsize=(10, 5))
-                
-                # 绘制三条线
-                plt.plot(gt[s_idx, :, c_idx], label='Ground Truth', color='#2c3e50', linewidth=2, linestyle='--')
-                plt.plot(base[s_idx, :, c_idx], label='Base Model', color='#e74c3c', alpha=0.7)
-                plt.plot(tta[s_idx, :, c_idx], label='After TTA', color='#3498db', linewidth=1.5)
-
-                plt.title(f"Forecast Comparison | Sample {s_idx} | Channel {c_idx}")
-                plt.xlabel("Time Step (within Pred_Len)")
-                plt.ylabel("Value")
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-                
-                save_path = os.path.join(self.save_dir, f"pred_s{s_idx}_c{c_idx}.png")
-                plt.savefig(save_path, bbox_inches='tight')
-                plt.close()
 
     def _plot_gating_strategy(self, gating, mse=None):
-        """
-        可视化门控权重 (λ) 与 预测误差 (MSE) 的演化关系
-        gating: [Total_Samples, n_vars]
-        mse: [Total_Samples] (可能与 gating 长度不同，通过均值对齐)
-        """
-        fig, ax1 = plt.subplots(figsize=(14, 6))
+        # 这里的画幅也相应调整为 1:4 左右 (16, 4)
+        fig, ax1 = plt.subplots(figsize=(16, 4)) 
 
         # --- 1. 处理 Gating 曲线 (左轴) ---
         x_gating = np.arange(len(gating))
@@ -73,25 +174,26 @@ class TTAVisualizer:
         else:
             ax1.plot(x_gating, gating.flatten(), label='Gating Weight (λ)', color='#27ae60', linewidth=2, zorder=3)
 
+        # 0 参考线
         ax1.axhline(y=0, color='black', linestyle='-', alpha=0.2)
         ax1.set_xlabel("Test Samples / Steps")
         ax1.set_ylabel("Gating Weight (λ)", color='#27ae60', fontsize=12)
         ax1.tick_params(axis='y', labelcolor='#27ae60')
-        ax1.grid(True, alpha=0.2)
+        
+        # 去掉网格
+        # ax1.grid(True, alpha=0.2) 
+
+        self._axis_start_from_zero(ax1, x=True, y=False)
+        self._set_nice_step_yaxis(ax1, gating, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
 
         # --- 2. 处理 Error 曲线 (右轴) ---
         if mse is not None:
-            ax2 = ax1.twinx()  # 创建共享 X 轴的右轴
+            ax2 = ax1.twinx()
             
-            # 对齐逻辑：如果 MSE 和 Gating 长度不同（例如一个是 Sample 级，一个是 Batch 级）
             if len(mse) != len(gating):
-                # 尝试将 MSE 聚合（如果是 Sample 级转 Batch 级）
-                # 这里假设 gating 长度代表 Batch 数，通过插值或重采样对齐
                 x_mse = np.linspace(0, len(gating) - 1, num=len(mse))
-                # 为了平滑，我们画出原始误差的散点或浅色线，再画出滑动平均
-                ax2.plot(x_mse, mse, color='#e74c3c', alpha=0.15, label='Raw MSE (Sample-wise)')
+                ax2.plot(x_mse, mse, color='#e74c3c', alpha=0.15, label='Raw MSE')
                 
-                # 计算滑动平均以对齐趋势
                 window = max(1, len(mse) // len(gating)) if len(mse) > len(gating) else 5
                 mse_smooth = np.convolve(mse, np.ones(window)/window, mode='valid')
                 x_smooth = np.linspace(0, len(gating) - 1, num=len(mse_smooth))
@@ -101,9 +203,11 @@ class TTAVisualizer:
 
             ax2.set_ylabel("Prediction Error (MSE)", color='#e74c3c', fontsize=12)
             ax2.tick_params(axis='y', labelcolor='#e74c3c')
-            ax2.set_yscale('log') # Error 通常跨度大，用对数轴更清晰
+            ax2.set_yscale('log') 
+
+            self._axis_start_from_zero(ax2, x=True, y=False)
+            self._set_yaxis_ticks(ax2, n_ticks=3)
             
-            # 合并两个轴的 Legend
             lines1, labels1 = ax1.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
             ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', frameon=True, framealpha=0.9)
@@ -112,63 +216,47 @@ class TTAVisualizer:
 
         plt.title("Gating Evolution vs. Prediction Error", fontsize=14)
         plt.tight_layout()
-        plt.savefig(os.path.join(self.save_dir, "gating_vs_error.png"), bbox_inches='tight', dpi=150)
+        plt.savefig(os.path.join(self.save_dir, "gating_vs_error.pdf"), bbox_inches='tight', dpi=150)
         plt.close()
 
-        # 3. 保持原有的 Heatmap 逻辑
         if gating.ndim > 1 and gating.shape[1] > 1:
-            plt.figure(figsize=(14, 6))
+            plt.figure(figsize=(16, 4))
             sns.heatmap(gating.T, cmap='YlGnBu', cbar_kws={'label': 'λ'})
-            plt.title("Gating Weights Heatmap (Channels vs Time)")
+            plt.title("Gating Weights Heatmap")
             plt.xlabel("Test Samples")
             plt.ylabel("Channel Index")
-            plt.savefig(os.path.join(self.save_dir, "gating_heatmap.png"), bbox_inches='tight')
+            plt.savefig(os.path.join(self.save_dir, "gating_heatmap.pdf"), bbox_inches='tight')
             plt.close()
 
-    def _plot_error_analysis(self, mse_steps):
-        plt.figure(figsize=(10, 5))
-        
-        window_size = min(20, len(mse_steps))
-        if window_size > 0:
-            smoothed_mse = np.convolve(mse_steps, np.ones(window_size)/window_size, mode='valid')
-            plt.plot(smoothed_mse, color='#8e44ad', label=f'MSE (Moving Avg {window_size})')
-        
-        plt.plot(mse_steps, color='#8e44ad', alpha=0.2, label='Batch MSE')
-        
-        plt.title("Prediction Error (MSE) over Test Stream")
-        plt.xlabel("Test Step")
-        plt.ylabel("MSE")
-        plt.legend()
-        plt.yscale('log') # 误差通常建议用对数坐标查看
-        plt.grid(True, which="both", ls="-", alpha=0.2)
-        
-        plt.savefig(os.path.join(self.save_dir, "error_trend.png"), bbox_inches='tight')
-        plt.close()
-        
     def plot_best_samples_per_channel(self, data_dict):
         base = data_dict['preds_base']
         tta = data_dict['preds_tta']
         gt = data_dict['gts']
         
-        mse_base = np.mean((base - gt)**2, axis=1) # [Samples, Channels]
-        mse_tta = np.mean((tta - gt)**2, axis=1)   # [Samples, Channels]
+        mse_base = np.mean((base - gt)**2, axis=1) 
+        mse_tta = np.mean((tta - gt)**2, axis=1)   
         
         improvement = mse_base - mse_tta
-        
-        best_improvement_indices = np.argmax(improvement, axis=0)
-        
+
+        num_samples = improvement.shape[0]
         num_channels = gt.shape[2]
-        print(f"Visualizer: Plotting MOST IMPROVED samples for {num_channels} channels...")
+        
+        # --- 修改 2: 每个通道保留 6 张图 ---
+        top_k = 10
+        k = min(top_k, num_samples)
+        print(f"Visualizer: Plotting TOP-{k} MOST IMPROVED samples for {num_channels} channels...")
 
         for c_idx in range(num_channels):
-            s_idx = best_improvement_indices[c_idx]
-            self._draw_adapter_impact_plot(
-                base, tta, gt, 
-                sample_idx=s_idx, 
-                channel=c_idx,
-                title_suffix=f"(Most Improved for Var {c_idx})",
-                prefix="best_improvement"
-            )
+            imp_c = improvement[:, c_idx]
+            topk_indices = np.argsort(-imp_c)[:k]
+            for rank, s_idx in enumerate(topk_indices, start=1):
+                self._draw_adapter_impact_plot(
+                    base, tta, gt,
+                    sample_idx=int(s_idx),
+                    channel=c_idx,
+                    title_suffix=f"(Top {rank} Improved for Var {c_idx})",
+                    prefix=f"best_improvement_top{rank}",
+                )
 
     def plot_worst_samples_per_channel(self, data_dict):
         base = data_dict['preds_base']
@@ -208,73 +296,98 @@ class TTAVisualizer:
                 prefix="sample_prediction")
 
     def _draw_adapter_impact_plot(self, base, tta, gt, sample_idx, channel, title_suffix="", prefix="best"):
-        delta = tta - base
+        def smooth_1d(y: np.ndarray, win: int = 7) -> np.ndarray:
+            y = np.asarray(y)
+            if y.ndim != 1: return y
+            if win is None or win <= 1: return y
+            win = int(win)
+            win = min(win, y.shape[0])
+            if win < 3: return y
+            if win % 2 == 0: win -= 1
+            if win < 3: return y
+            pad = win // 2
+            y_pad = np.pad(y, (pad, pad), mode='edge')
+            kernel = np.ones(win, dtype=np.float32) / float(win)
+            return np.convolve(y_pad, kernel, mode='valid')
+
         y_gt = gt[sample_idx, :, channel]
         y_base = base[sample_idx, :, channel]
         y_tta = tta[sample_idx, :, channel]
-        y_delta = delta[sample_idx, :, channel]
 
+        is_best_improvement = str(prefix).startswith("best_improvement")
+
+        if is_best_improvement:
+            smooth_win = 7
+            y_gt = smooth_1d(y_gt, smooth_win)
+            y_base = smooth_1d(y_base, smooth_win)
+            y_tta = smooth_1d(y_tta, smooth_win)
+
+        y_delta = y_tta - y_base
         mse_base = np.mean((y_base - y_gt)**2)
         mse_tta = np.mean((y_tta - y_gt)**2)
-        improvement = (mse_base - mse_tta) / (mse_base + 1e-9) * 100
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 9), sharex=True, 
-                                       gridspec_kw={'height_ratios': [1, 0.7]})
+        if is_best_improvement:
+            fig, ax1 = plt.subplots(1, 1, figsize=self._figsize_custom())
+            ax2 = None
+        else:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self._figsize_custom(), sharex=True, 
+                                           gridspec_kw={'height_ratios': [1, 0.5]})
 
-        ax1.plot(y_gt, label='Ground Truth', color='#333333', alpha=0.4, linewidth=1.2, linestyle='-')
-        ax1.plot(y_base, label='Base Pred', color="#26CE99", linestyle='--', linewidth=1.8)
-        ax1.plot(y_tta, label='TTA Pred', color="#EC591F", linewidth=2.2, linestyle='-')
-        
-        ax1.set_title(f"Prediction Comparison (Sample {sample_idx}, Var {channel})\n{title_suffix}", fontsize=13, pad=15)
-        ax1.legend(loc='upper left', frameon=True)
-        ax1.grid(True, alpha=0.2)
+        lw = 1.5
+        if is_best_improvement:
+            base_color = "#0000FF"
+            tta_color = "#FF0000"
+        else:
+            base_color = "#004CFE"
+            tta_color = "#D00202"
 
-        info_color = 'green' if improvement > 0 else 'red'
-        info_text = (
-            f"Base MSE: {mse_base:.4f}\n"
-            f"TTA MSE:  {mse_tta:.4f}\n"
-            f"Change:   {improvement:+.2f}%"
-        )
-        
-        props = dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=info_color)
-        ax1.text(0.98, 0.95, info_text, transform=ax1.transAxes, fontsize=10,
-                 verticalalignment='top', horizontalalignment='right', bbox=props, color=info_color, weight='bold')
+        ax1.plot(y_gt, label='Ground Truth', color="#000000", linewidth=lw, linestyle='-')
+        ax1.plot(y_base, label='Base Pred', color=base_color, linestyle='-', linewidth=lw)
+        ax1.plot(y_tta, label='TTA Pred', color=tta_color, linewidth=lw, linestyle='-')
 
-        ax2.plot(y_delta, label='Adapter Adjustment (Delta)', color='#27ae60', linewidth=2)
-        ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
+        y_stack = np.stack([y_gt, y_base, y_tta], axis=0)
+        self._axis_start_from_zero(ax1, x=True, y=False)
+        self._set_nice_step_yaxis(ax1, y_stack, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
+
+        if not is_best_improvement:
+            ax1.set_title(f"Prediction Comparison (Sample {sample_idx}, Var {channel})\n{title_suffix}", fontsize=13, pad=15)
         
-        ax2.fill_between(range(len(y_delta)), y_delta, 0, color='#27ae60', alpha=0.1)
-        
-        ax2.set_title("Adapter Contribution (TTA_Pred - Base_Pred)", fontsize=11)
-        ax2.set_ylabel("Adjustment Value")
-        ax2.set_xlabel("Time Step")
-        ax2.legend(loc='upper left')
-        ax2.grid(True, alpha=0.2)
+        # 去掉网格
+        # ax1.grid(True, alpha=0.2) 
+
+        if ax2 is not None:
+            ax2.plot(y_delta, label='Adapter Adjustment (Delta)', color='#27ae60', linewidth=2)
+            ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
+            ax2.fill_between(range(len(y_delta)), y_delta, 0, color='#27ae60', alpha=0.1)
+            
+            ax2.set_title("Adapter Contribution (TTA_Pred - Base_Pred)", fontsize=11)
+            ax2.set_ylabel("Adjustment Value")
+            ax2.set_xlabel("Time Step")
+            ax2.legend(loc='upper left', fontsize=9)
+            
+            # 去掉网格
+            # ax2.grid(True, alpha=0.2)
+
+            self._axis_start_from_zero(ax2, x=True, y=False)
+            self._set_nice_step_yaxis(ax2, y_delta, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
         
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, f"{prefix}_impact_var{channel}_s{sample_idx}.png")
+        save_path = os.path.join(self.save_dir, f"{prefix}_impact_var{channel}_s{sample_idx}.pdf")
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
         
     def plot_input_and_predictions(self, data_dict, sample_idx=0, channel_idx=0, prefix="full_sequence"):
-        """
-        核心可视化方法：
-        将 [Input Window] 和 [Prediction Window] 拼接展示，对比 Base Pred 和 TTA Pred。
-        """
-        # 1. 从 data_dict 提取数据并转为 numpy (如果还是 tensor 的话)
         def to_numpy(x): return x.cpu().numpy() if hasattr(x, 'cpu') else x
 
         try:
-            # 必须包含的数据
-            inputs = to_numpy(data_dict['inputs'])      # [N, Seq_Len, C]
-            gts = to_numpy(data_dict['gts'])            # [N, Pred_Len, C]
-            base = to_numpy(data_dict['preds_base'])    # [N, Pred_Len, C]
-            tta = to_numpy(data_dict['preds_tta'])      # [N, Pred_Len, C]
+            inputs = to_numpy(data_dict['inputs'])      
+            gts = to_numpy(data_dict['gts'])            
+            base = to_numpy(data_dict['preds_base'])    
+            tta = to_numpy(data_dict['preds_tta'])      
         except KeyError as e:
             print(f"Visualizer Error: Missing key {e} in data_dict.")
             return
 
-        # 2. 提取具体样本和通道数据
         y_inp = inputs[sample_idx, :, channel_idx]
         y_gt = gts[sample_idx, :, channel_idx]
         y_base = base[sample_idx, :, channel_idx]
@@ -284,45 +397,37 @@ class TTAVisualizer:
         seq_len = len(y_inp)
         pred_len = len(y_gt)
         
-        # 3. 设置时间轴：Input 在前，Prediction 在后
         x_inp = np.arange(seq_len)
         x_pred = np.arange(seq_len, seq_len + pred_len)
 
-        # 4. 计算 MSE 和改善程度
         mse_base = np.mean((y_base - y_gt)**2)
         mse_tta = np.mean((y_tta - y_gt)**2)
-        improvement = (mse_base - mse_tta) / (mse_base + 1e-9) * 100
 
-        # 5. 绘图
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, 
-                                       gridspec_kw={'height_ratios': [1, 0.4]})
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self._figsize_custom(), sharex=True, 
+                           gridspec_kw={'height_ratios': [1, 0.5]})
 
-        # --- Subplot 1: Sequence Comparison ---
-        # 历史窗口 (Input)
+        # --- Subplot 1 ---
         ax1.plot(x_inp, y_inp, label='Input (Lookback)', color='#7f8c8d', linewidth=2, alpha=0.8)
-        
-        # 预测窗口 (GT, Base, TTA)
-        ax1.plot(x_pred, y_gt, label='Ground Truth', color='#2c3e50', linestyle='--', linewidth=1.5)
-        ax1.plot(x_pred, y_base, label='Base Model Pred', color="#26CE99", linestyle='-', alpha=0.6, marker='.', markersize=4)
-        ax1.plot(x_pred, y_tta, label='TTA Adjusted Pred', color="#EC591F", linewidth=2.5)
+        lw = 2
+        ax1.plot(x_pred, y_gt, label='Ground Truth', color='black', linestyle='--', linewidth=lw)
+        ax1.plot(x_pred, y_base, label='Base Model Pred', color="#26CE99", linestyle='-', alpha=0.6, marker='.', markersize=4, linewidth=lw)
+        ax1.plot(x_pred, y_tta, label='TTA Adjusted Pred', color="#8B0000", linewidth=lw)
 
-        # 垂直分割线
         ax1.axvline(x=seq_len - 1, color='#e74c3c', linestyle='-', linewidth=1.2, alpha=0.7)
         ax1.text(seq_len - 1, ax1.get_ylim()[1], ' Forecast Start ', color='#e74c3c', 
                  ha='right', va='top', fontweight='bold', fontsize=10)
 
         ax1.set_title(f"TTA Adaption Impact | Sample {sample_idx} | Channel {channel_idx}", fontsize=14)
-        ax1.legend(loc='upper left', frameon=True, fontsize=9, ncol=2)
-        ax1.grid(True, alpha=0.2)
+        
+        # 去掉网格
+        # ax1.grid(True, alpha=0.2)
 
-        # 标注 MSE 变化
-        info_color = 'green' if improvement > 0 else 'red'
-        info_text = f"Base MSE: {mse_base:.4f}\nTTA MSE:  {mse_tta:.4f}\nChange:   {improvement:+.2f}%"
-        props = dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=info_color)
-        ax1.text(0.98, 0.95, info_text, transform=ax1.transAxes, fontsize=10,
-                 va='top', ha='right', bbox=props, color=info_color, weight='bold', family='monospace')
+        # Use concatenation to handle different input/pred lengths.
+        y_stack = np.concatenate([y_inp, y_gt, y_base, y_tta], axis=0)
+        self._axis_start_from_zero(ax1, x=True, y=False)
+        self._set_nice_step_yaxis(ax1, y_stack, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
 
-        # --- Subplot 2: Adapter Contribution (Delta) ---
+        # --- Subplot 2 ---
         ax2.plot(x_pred, y_delta, label='TTA Adjustment (Delta)', color='#3498db', linewidth=2)
         ax2.fill_between(x_pred, y_delta, 0, color='#3498db', alpha=0.2)
         ax2.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
@@ -331,12 +436,15 @@ class TTAVisualizer:
         ax2.set_ylabel("Delta")
         ax2.set_xlabel("Time Steps")
         ax2.legend(loc='upper left', fontsize=9)
-        ax2.grid(True, alpha=0.2)
+        
+        # 去掉网格
+        # ax2.grid(True, alpha=0.2)
 
-        # 6. 保存
+        self._axis_start_from_zero(ax2, x=True, y=False)
+        self._set_nice_step_yaxis(ax2, y_delta, n_ticks=3, pad_frac=0.1, force_zero_if_nonneg=False)
+
         plt.tight_layout()
-        save_name = f"{prefix}_s{sample_idx}_c{channel_idx}.png"
+        save_name = f"{prefix}_s{sample_idx}_c{channel_idx}.pdf"
         save_path = os.path.join(self.save_dir, save_name)
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
-        # print(f"Visualizer: Saved full sequence plot to {save_path}")

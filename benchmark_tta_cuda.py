@@ -1,0 +1,428 @@
+import os
+import time
+import csv
+import torch
+import numpy as np
+from copy import deepcopy
+import types
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
+
+# 导入项目配置和工具
+from config import get_cfg_defaults
+# from device_manager import global_device
+global_device = "cuda" if torch.cuda.is_available() else "cpu"
+from utils.misc import set_seeds, prepare_inputs
+from models.build import build_model
+from models.forecast import forecast
+from datasets.build import build_dataset
+
+# 导入 TTA 方法
+import tta.tafas as tafas
+import tta.petsa as petsa
+import tta.dynatta as dynatta
+import tta.coba as coba
+
+# ==========================================
+# 1. 内存级 DataLoader (消除 I/O 瓶颈，解决 Device 冲突)
+# ==========================================
+class InMemoryLoader:
+    """
+    我们将数据留在 CPU 上。
+    因为各 TTA Adapter 在初始化 (__init__) 期间可能会触发试跑，此时模型可能还在 CPU 上。
+    原版的 prepare_inputs 会自动把 CPU 数据 .to(device)，完美符合原生生态。
+    """
+    def __init__(self, dataset, num_samples_limit=2000):
+        self.dataset = dataset
+        self.batches =[]
+        limit = min(len(dataset), num_samples_limit)
+        print(f"[*] Pre-loading {limit} samples into CPU Memory...")
+        
+        x_list, y_list, x_mark_list, y_mark_list = [], [], [],[]
+        for i in range(limit):
+            x, x_mark, y, y_mark = dataset[i]
+            x_list.append(torch.from_numpy(x) if isinstance(x, np.ndarray) else x)
+            x_mark_list.append(torch.from_numpy(x_mark) if isinstance(x_mark, np.ndarray) else x_mark)
+            y_list.append(torch.from_numpy(y) if isinstance(y, np.ndarray) else y)
+            y_mark_list.append(torch.from_numpy(y_mark) if isinstance(y_mark, np.ndarray) else y_mark)
+            
+        self.batch_data = (
+            torch.stack(x_list).float().to(global_device),
+            torch.stack(x_mark_list).float().to(global_device),
+            torch.stack(y_list).float().to(global_device),
+            torch.stack(y_mark_list).float().to(global_device)
+        )
+        self.total_samples = limit
+
+    def __iter__(self):
+        yield self.batch_data
+
+    def __len__(self):
+        return 1
+
+# ==========================================
+# 2. 增强型冻结工具 (冻结参数 + 清理优化器)
+# ==========================================
+def freeze_and_clean(adapter):
+    for param in adapter.model.parameters():
+        param.requires_grad = False
+    
+    active_params =[]
+    if hasattr(adapter, 'cali') and adapter.cali is not None:
+        if hasattr(adapter.cali.out_cali, 'online_mode'):
+            adapter.cali.online_mode = True
+            
+        if hasattr(adapter.cali.out_cali, 'get_optim_params'):
+            for param in adapter.cali.parameters():
+                param.requires_grad = False
+            for param in adapter.cali.out_cali.get_optim_params():
+                param.requires_grad = True
+                active_params.append(param)
+        else:
+            for param in adapter.cali.parameters():
+                param.requires_grad = True
+                active_params.append(param)
+    else:
+        for param in adapter.parameters():
+            if param.requires_grad: active_params.append(param)
+            
+    if active_params:
+        adapter.optimizer = torch.optim.Adam(active_params, lr=1e-3)
+
+# ==========================================
+# 3. 核心测试逻辑
+# ==========================================
+@torch.enable_grad()
+def custom_adapt(self, enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all):
+    batch_start = 0
+    batch_end = 0
+    batch_idx = 0
+    self.cur_step = self.cfg.DATA.SEQ_LEN - 2
+    total_len = len(enc_window_all)
+    
+    while batch_end < len(enc_window_all):
+        enc_window_first = enc_window_all[batch_start]
+
+        if hasattr(self, '_calculate_period_and_batch_size'):
+            period, batch_size = self._calculate_period_and_batch_size(enc_window_first)
+        else:
+            period, batch_size = self._calc_period(enc_window_first)
+            
+        batch_end = batch_start + batch_size
+
+        if batch_end > len(enc_window_all):
+            batch_end = len(enc_window_all)
+            batch_size = batch_end - batch_start
+
+        self.cur_step += batch_size
+
+        batch_inputs = (
+            enc_window_all[batch_start:batch_end],
+            enc_window_stamp_all[batch_start:batch_end],
+            dec_window_all[batch_start:batch_end],
+            dec_window_stamp_all[batch_start:batch_end]
+        )
+        
+        # self.pred_step_end_dict[batch_idx] = self.cur_step + self.cfg.DATA.PRED_LEN
+        # self.inputs_dict[batch_idx] = batch_inputs
+        
+        if hasattr(self, '_adapt_full'):
+            self._adapt_full(batch_inputs)
+        else:
+            # Always run the full-ground-truth inference path once per batch.
+            self._adapt_with_full_ground_truth_if_available(batch_inputs)
+        
+        if hasattr(self, '_adapt_partial'):
+            pred, ground_truth = self._adapt_partial(batch_inputs, period, batch_size, batch_idx)
+        else:
+            pred, ground_truth = self._adapt_with_partial_ground_truth(batch_inputs, period, batch_size, batch_idx)
+        
+        method_name = str(getattr(self.cfg.TTA, 'METHOD', '')).upper()
+        is_dynatta = method_name == 'DYNATTA'
+        is_coba = method_name == 'COBA'
+
+        if is_coba and hasattr(self, 'cali') and hasattr(self.cali, 'output_calibration'):
+            # For COBA, skip extra forecast in adjust stage and only apply output calibration.
+            pred_after_adapt = self.cali.output_calibration(pred, batch_inputs[0])
+            for i in range(batch_size - 1):
+                pred[i, period - i:] = pred_after_adapt[i, period - i:]
+        elif is_dynatta:
+            def _build_dynatta_metrics(ref_tensor):
+                # DynaTTA DynamicGCM expects metric feature dimension = 3
+                return torch.zeros((ref_tensor.shape[0], 3), device=ref_tensor.device, dtype=ref_tensor.dtype)
+            
+            metrics = _build_dynatta_metrics(pred)
+            pred, ground_truth = self._adjust_prediction(pred, batch_inputs, batch_size, period, metrics)
+        else:
+            pred, ground_truth = self._adjust_prediction(pred, batch_inputs, batch_size, period)
+            
+        batch_start = batch_end
+        batch_idx += 1
+
+
+@torch.enable_grad()
+def custom_full_ground_truth_inference(self, inputs):
+    """
+    Pure-inference replacement of _adapt_with_full_ground_truth_if_available.
+    This bypasses internal buffer-based checks and runs one forward path every call.
+    """
+    if hasattr(self, 'switch_model_to_train'):
+        self.switch_model_to_train()
+    elif hasattr(self, 'switch_train'):
+        self.switch_train()
+    else:
+        self._switch_model_to_train()
+
+    is_dynatta = str(getattr(self.cfg.TTA, 'METHOD', '')).upper() == 'DYNATTA'
+    is_coba = str(getattr(self.cfg.TTA, 'METHOD', '')).upper() == 'COBA'
+
+    def _build_dynatta_metrics(ref_tensor):
+        # DynaTTA DynamicGCM expects metric feature dimension = 3
+        return torch.zeros((ref_tensor.shape[0], 3), device=ref_tensor.device, dtype=ref_tensor.dtype)
+
+    if self.cali.input_calibration is not None:
+        if is_dynatta:
+            enc_window = prepare_inputs(inputs)[0]
+            metrics = _build_dynatta_metrics(enc_window)
+            inputs = self.cali.input_calibration(inputs, metrics)
+        else:
+            inputs = self.cali.input_calibration(inputs)
+
+    pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+
+    if self.cali.output_calibration is not None:
+        if is_dynatta:
+            metrics = _build_dynatta_metrics(pred)
+            pred = self.cali.output_calibration(pred, metrics)
+        elif is_coba:
+            enc_window = prepare_inputs(inputs)[0]
+            pred = self.cali.output_calibration(pred, enc_window)
+        else:
+            pred = self.cali.output_calibration(pred)
+
+
+    loss = F.mse_loss(pred, ground_truth) 
+
+    self.optimizer.zero_grad()
+    loss.backward()
+    self.optimizer.step()
+    if hasattr(self, 'switch_model_to_eval'):
+        self.switch_model_to_eval()
+    elif hasattr(self, 'switch_eval'):
+        self.switch_eval()
+    else:
+        self._switch_model_to_eval()
+
+    return pred, ground_truth
+
+
+@torch.enable_grad()
+def custom_partial_ground_truth_inference(self, inputs, period, batch_size, batch_idx):
+    """
+    Pure-inference replacement of _adapt_with_partial_ground_truth.
+    Keeps the original optimization path but is detached from internal logging/caching flows.
+    """
+    for _ in range(self.cfg.TTA.TAFAS.STEPS):
+        self.n_adapt += 1
+        is_coba = str(getattr(self.cfg.TTA, 'METHOD', '')).upper() == 'COBA'
+        is_dynatta = str(getattr(self.cfg.TTA, 'METHOD', '')).upper() == 'DYNATTA'
+
+        def _build_dynatta_metrics(ref_tensor):
+            # DynaTTA DynamicGCM expects metric feature dimension = 3
+            return torch.zeros((ref_tensor.shape[0], 3), device=ref_tensor.device, dtype=ref_tensor.dtype)
+
+        if hasattr(self, 'cali') and self.cfg.TTA.TAFAS.CALI_MODULE and self.cfg.MODEL.NAME != 'PatchTST':
+            if is_dynatta:
+                enc_window = prepare_inputs(inputs)[0]
+                metrics = _build_dynatta_metrics(enc_window)
+                inputs = self.cali.input_calibration(inputs, metrics)
+            else:
+                inputs = self.cali.input_calibration(inputs)
+
+        if is_coba:
+            with torch.no_grad():
+                pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+        else:
+            pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
+
+        if self.cali.output_calibration is not None:
+            if is_dynatta:
+                metrics = _build_dynatta_metrics(pred)
+                pred = self.cali.output_calibration(pred, metrics)
+            elif is_coba:
+                enc_window = prepare_inputs(inputs)[0]
+                pred = self.cali.output_calibration(pred, enc_window)
+            else:
+                pred = self.cali.output_calibration(pred)
+
+        pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
+        mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
+
+        self.optimizer.zero_grad()
+        mse_partial.backward()
+        self.optimizer.step()
+
+    return pred, ground_truth
+
+def run_benchmark(MODEL_NAME="DLinear"):
+    set_seeds(1)
+    
+    # MODEL_NAME = "DLinear"
+    # MODEL_NAME = "PatchTST"
+    DATASET_NAME = "ETTh1"
+    # PRED_LENS =[96, 192, 336, 720]
+    # PRED_LENS =[96, 192, 336, 720]
+    # PRED_LENS =[96]
+    # PRED_LENS =[192]
+    PRED_LENS = [336, 720]
+    NUM_SAMPLES = 32
+    NUM_BENCH_RUNS = 100
+    NUM_WARMUP_RUNS = 10
+    
+    RESULT_FILE = f"./results/benchmark_tta/{MODEL_NAME}_{DATASET_NAME}_performance.csv"
+    os.makedirs(os.path.dirname(RESULT_FILE), exist_ok=True)
+    
+    with open(RESULT_FILE, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Model', 'Method', 'Pred_Len', 'Add_Params(K)', 'Peak_Memory(MB)', 'Throughput(samples/s)'])
+
+    methods = {
+        "TAFAS": tafas.build_adapter,
+        # "PETSA": petsa.build_adapter,
+        # "DynaTTA": dynatta.build_adapter,
+        # "COBA": coba.build_adapter
+    }
+
+    use_cuda = global_device.startswith("cuda")
+    if use_cuda:
+        print(f"[*] CUDA benchmark enabled on device: {torch.cuda.get_device_name(0)}")
+    else:
+        print("[WARN] CUDA not available, fallback to CPU. Throughput/memory are not CUDA metrics.")
+
+    print(f"\n🚀 STARTING ACADEMIC BENCHMARK: {MODEL_NAME} on {DATASET_NAME}")
+
+    for p_len in PRED_LENS:
+        print(f"\n" + "="*30 + f" Pred_Len: {p_len} " + "="*30)
+        
+        cfg = get_cfg_defaults()
+        cfg.defrost()
+        cfg.DATA.NAME, cfg.MODEL.NAME = DATASET_NAME, MODEL_NAME
+        cfg.DATA.SEQ_LEN = cfg.MODEL.seq_len = 96
+        cfg.DATA.PRED_LEN = cfg.MODEL.pred_len = p_len
+        cfg.DATA.N_VAR = 7
+        cfg.MODEL.enc_in = cfg.MODEL.dec_in = cfg.MODEL.c_out = 7 
+        cfg.TRAIN.BATCH_SIZE = 64
+        cfg.TTA.ENABLE = True
+        cfg.TTA.DOMAIN_SHIFT = False
+        
+        cfg.TTA.DUAL.CALI_NAME = 'CoBA_TF_Adapter' 
+        cfg.TTA.DUAL.LOSS_NAME = 'MSE'
+        cfg.TTA.DUAL.COBA_ONLINE_ENABLED = True
+        cfg.TTA.DUAL.GCM_N_BASES = 32
+        cfg.TTA.DUAL.PRETRAIN_EPOCHS = 0
+        cfg.TTA.DUAL.CALI_INPUT_ENABLE = False
+        cfg.TTA.DUAL.CALI_OUTPUT_ENABLE = True
+        
+        # 构建真实 Dataset
+        real_dataset = build_dataset(cfg, "test")
+        # real_train_dataset = build_dataset(cfg, "train")
+        
+        in_mem_test = InMemoryLoader(real_dataset, num_samples_limit=NUM_SAMPLES)
+        # in_mem_train = InMemoryLoader(real_train_dataset, num_samples_limit=NUM_SAMPLES) 
+        
+        base_model = build_model(cfg).to(global_device)
+        base_params_num = sum(p.numel() for p in base_model.parameters())
+        original_model_state = deepcopy(base_model.state_dict())
+
+
+        for method_name, build_fn in methods.items():
+            print(f"  -> Benchmarking: {method_name}")
+            cfg.TTA.METHOD = method_name
+            
+            base_model.load_state_dict(deepcopy(original_model_state))
+            
+            try:
+                # 实例化 Adapter
+                adapter = build_fn(cfg, base_model)
+                
+                adapter = adapter.to(global_device)
+                
+                # 替换 adapt 函数为无输出、不保留指标的纯推出版
+                adapter.adapt = types.MethodType(custom_adapt, adapter)
+                if hasattr(adapter, '_adapt_with_full_ground_truth_if_available'):
+                    adapter._adapt_with_full_ground_truth_if_available = types.MethodType(custom_full_ground_truth_inference, adapter)
+                
+                if hasattr(adapter, '_adapt_full'):
+                    adapter._adapt_full = types.MethodType(custom_full_ground_truth_inference, adapter)
+
+                if hasattr(adapter, '_adapt_with_partial_ground_truth'):
+                    adapter._adapt_with_partial_ground_truth = types.MethodType(custom_partial_ground_truth_inference, adapter)
+
+                if hasattr(adapter, '_adapt_partial'):
+                    adapter._adapt_partial = types.MethodType(custom_partial_ground_truth_inference, adapter)
+                
+                adapter.is_eved_like = False 
+                # freeze_and_clean(adapter)
+                
+                prepared_inputs = prepare_inputs(in_mem_test.batch_data)
+
+                # 正式计时前先预热，避免首次执行开销污染统计
+                for _ in range(NUM_WARMUP_RUNS):
+                    adapter.adapt(*prepared_inputs)
+                if use_cuda:
+                    torch.cuda.synchronize()
+
+                if use_cuda:
+                    torch.cuda.synchronize()
+                start_t = time.perf_counter()
+                peak_mems = []
+                for _ in range(NUM_BENCH_RUNS):
+                    if use_cuda:
+                        torch.cuda.reset_peak_memory_stats()
+
+                    # 直接传处理后的数据，避免内部各种 I/O 操作及数据搬迁
+                    adapter.adapt(*prepared_inputs)
+
+                    if use_cuda:
+                        torch.cuda.synchronize()
+                        peak_mem = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                    else:
+                        peak_mem = 0.0
+
+                    peak_mems.append(peak_mem)
+                if use_cuda:
+                    torch.cuda.synchronize()
+                end_t = time.perf_counter()
+                run_durations = end_t - start_t
+                
+                avg_peak_mem = sum(peak_mems) / NUM_BENCH_RUNS if peak_mems else 0.0
+                
+                # 计算指标
+                avg_duration = float(run_durations / NUM_BENCH_RUNS)
+                throughput = in_mem_test.total_samples / avg_duration
+                
+                # 获取整个 adapter 的参数量，并计算相对于基座增加的参数
+                adapter_total = sum(p.numel() for p in adapter.parameters())
+                if adapter_total >= base_params_num:
+                    params_k = (adapter_total - base_params_num) / 1e3
+                else:
+                    print(f"     [WARN] Adapter params ({adapter_total}) less than base model ({base_params_num}), showing total params.")
+                    params_k = adapter_total / 1e3
+                
+                print(f"     [OK] Speed: {throughput:.2f} samples/s (avg over {NUM_BENCH_RUNS} runs) | Mem: {avg_peak_mem:.2f} MB | Params: {params_k:.2f} K")
+                
+                with open(RESULT_FILE, mode='a', newline='') as f:
+                    csv.writer(f).writerow([MODEL_NAME, method_name, p_len, f"{params_k:.2f}", f"{avg_peak_mem:.2f}", f"{throughput:.2f}"])
+            
+            except Exception as e:
+                print(f"     [ERR] {method_name} failed:")
+                import traceback; traceback.print_exc()
+
+            time.sleep(0.5)
+
+    print(f"\n✅ All Finished! Data saved to {RESULT_FILE}")
+
+if __name__ == "__main__":
+    # run_benchmark('DLinear')
+    # run_benchmark('PatchTST')
+    run_benchmark('DLinear')

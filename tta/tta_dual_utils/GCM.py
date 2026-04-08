@@ -2739,8 +2739,9 @@ class CoBA_TF_Adapter(nn.Module):
         
         # 初始化: 对每个变量的 Key 矩阵分别做正交初始化
         for v in range(n_var):
-            nn.init.orthogonal_(self.static_keys[v])
+            # nn.init.orthogonal_(self.static_keys[v]) # default
             # nn.init.kaiming_uniform_(self.static_values[v])
+            nn.init.kaiming_uniform_(self.static_keys[v]) # for ablation lambda
         nn.init.zeros_(self.static_values)
 
         # --- 3. Online Mode Parameters ---

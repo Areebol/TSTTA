@@ -1,4 +1,5 @@
 
+
 from device_manager import global_device
 import os
 from models.build import build_model, load_best_model, build_norm_module
@@ -18,6 +19,7 @@ import tta.tta_pka as tta_pka
 import tta.pka_online as pka_online
 import tta.tta_coba_online as tta_coba_online
 import tta.coba as coba
+import tta.coba_vis as coba_vis
 from tta.tta_output import build_tta_runner
 from config import get_norm_module_cfg
 
@@ -76,6 +78,8 @@ def main():
             adapter = pka_online.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "COBA":
             adapter = coba.build_adapter(cfg, model)
+        elif cfg.TTA.METHOD == "COBA_Vis":
+            adapter = coba_vis.build_adapter(cfg, model)
         else:
             print(f"Unknown TTA method: {cfg.TTA.METHOD}")
         
