@@ -6,10 +6,9 @@
 
 # MODELS=("PatchTSTPCD" "DLinearPCD" "FreTSPCD" "iTransformerPCD" "OLSPCD" "MICNPCD" ) 
 # MODELS=("PatchTSTPCD" "DLinearPCD" "FreTSPCD" )
-MODELS=( "iTransformerPCD" "OLSPCD" "MICNPCD" )
+MODELS=( "iTransformerPCD")
 # DATASETS=("eVED")
-# TTA_METHODS=("TAFAS" "PETSA" "DynaTTA")
-TTA_METHODS=("TAFAS" )
+TTA_METHODS=("TAFAS" "PETSA" "DynaTTA")
 # TTA_METHODS=("TAFAS" )
 # TTA_METHODS=("DynaTTA")
 # TTA_METHODS=("TAFAS" "PETSA")
@@ -17,15 +16,15 @@ TTA_METHODS=("TAFAS" )
 # PRED_LENS=(48 96 192)
 PRED_LENS=(24 48 96 192)
 BASE_LRS=(1e-4)
-TTA_LRS=(1e-2)
+TTA_LRS=(1e-2 1e-3 1e-4 1e-5)
 
 
-TRAIN_IDS="['10']"
-TEST_IDS="['455']"
+# TRAIN_IDS="['10']"
+# TEST_IDS="['455']"
 
 PAIRS=("eVED:eVED")
-# TRAIN_IDS="['455']"
-# TEST_IDS="['10']"
+TRAIN_IDS="['455']"
+TEST_IDS="['10']"
 
 # TRAIN_IDS="['10']"
 # TEST_IDS="['455']"
@@ -39,10 +38,10 @@ export TEST_IDS
 export VAL_IDS
 export TRAIN_IDS_CLEAN
 
-NPUS=(0 1 2 3 )          # 可用的 NPU ID
+NPUS=(0 1 )          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=1               # 每个 NPU 并行任务数
+PER_NPU=4              # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -66,7 +65,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     DATASET=$(echo $PAIR | cut -d: -f1)
     TARGET=$(echo $PAIR | cut -d: -f2)
 
-    CHECKPOINT_DIR="./checkpoints/0331/${MODEL}/${DATASET}_${PRED_LEN}_${BASE_LR}_ep_30_10_2_455"
+    CHECKPOINT_DIR="./checkpoints/0331/${MODEL}/${DATASET}_${PRED_LEN}_${BASE_LR}_ep_30_455_2_10"
     RESULT_DIR="./results/0331/455_2_10/${TTA_METHOD}/${MODEL}/"
 
     echo "Job slot {%}: NPU=${NPU_ID} | MODEL={1} | TTA={6} |  ${DATASET} -> ${TARGET} | PRED_LEN={3} BASE_LR={4} TTA_LR={5}"
@@ -96,7 +95,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         TRAIN.ENABLE False \
         TRAIN.CHECKPOINT_DIR ${CHECKPOINT_DIR} \
         TEST.ENABLE True \
-        TTA.ENABLE False \
+        TTA.ENABLE True \
         TTA.SOLVER.BASE_LR ${TTA_LR} \
         TTA.DOMAIN_SHIFT True \
         TTA.METHOD ${TTA_METHOD} \

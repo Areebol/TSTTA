@@ -2739,9 +2739,9 @@ class CoBA_TF_Adapter(nn.Module):
         
         # 初始化: 对每个变量的 Key 矩阵分别做正交初始化
         for v in range(n_var):
-            # nn.init.orthogonal_(self.static_keys[v]) # default
+            nn.init.orthogonal_(self.static_keys[v]) # defaults
             # nn.init.kaiming_uniform_(self.static_values[v])
-            nn.init.kaiming_uniform_(self.static_keys[v]) # for ablation lambda
+            # nn.init.kaiming_uniform_(self.static_keys[v]) # for ablation lambda
         nn.init.zeros_(self.static_values)
 
         # --- 3. Online Mode Parameters ---
@@ -2904,7 +2904,7 @@ class Linear_Adapter(nn.Module):
             
         # 2. 门控残差连接：利用 tanh(gating) 控制修正量流出的幅度
         # 并且 tanh 会将门控系数严格限制在 (-1, 1) 之间，防止梯度爆炸
-        out = x + (self.gating) * delta 
+        out = x + torch.tanh(self.gating) * delta 
         
         return out
 

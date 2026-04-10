@@ -5,27 +5,27 @@
 ############################################
 
 # # 参与实验的模型
-MODELS=("iTransformerPCD" "OLSPCD" "MICNPCD" ) 
+MODELS=("iTransformerPCD" ) 
 # MODELS=("PatchTSTPCD")
 
 # 迁移对设定
 PAIRS=("eVED:eVED")
 
 # 迁移 ID 设置：455 预训练 -> 10 测试
-# TRAIN_IDS="['455']"
-# TEST_IDS="['10']"
+TRAIN_IDS="['455']"
+TEST_IDS="['10']"
 
-TRAIN_IDS="['10']"
-TEST_IDS="['455']"
+# TRAIN_IDS="['10']"
+# TEST_IDS="['455']"
 
 VAL_IDS=${TRAIN_IDS}
 TRAIN_IDS_CLEAN=$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")
 
 # COBA 核心超参数
-PRED_LENS=(24 48 96 192)
+PRED_LENS=(192)
 export OFFLINE_LRS=(1e-1 5e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
 export ONLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
-BASE_NUMS=(32)          # Codebook 基向量数量
+BASE_NUMS=(64)          # Codebook 基向量数量
 LAMBDA_ORTHOS=(1.0)    # 正交约束权重
 QUERY_TYPES=(time-CI)
 
@@ -62,8 +62,8 @@ parallel --lb -j ${TOTAL_JOBS} '
     TARGET=$(echo $PAIR | cut -d: -f2)
 
     # 路径根据 0327 训练好的 455 车模型设置
-    CHECKPOINT_DIR="./checkpoints/0331/${MODEL}/${DATASET}_${PRED_LEN}_1e-4_ep_30_10_2_455/"
-    RESULT_DIR="./results/0331_COBA3/10_2_455/${MODEL}/"
+    CHECKPOINT_DIR="./checkpoints/0401/${MODEL}/${DATASET}_${PRED_LEN}_1e-4_ep_60_455_2_10/"
+    RESULT_DIR="./results/0401/eVED/455_2_10/2CoBA${MODEL}/"
 
     echo "Job slot {%}: NPU=${NPU_ID} | MODEL=${MODEL} | COBA-Online | ${TRAIN_IDS} -> ${TEST_IDS} | PRED_LEN=${PRED_LEN}"
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}

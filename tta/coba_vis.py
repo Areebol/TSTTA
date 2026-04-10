@@ -30,21 +30,43 @@ from device_manager import global_device
 
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
-        is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        n_var = cfg.MODEL.c_out if is_patchtst else cfg.DATA.N_VAR
-        return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
+        # 1. 自动判断是否是 PCD 模型，正确分配输出通道数
+        is_pcd = 'PCD' in cfg.MODEL.NAME
+        is_patchtst_orig = (cfg.MODEL.NAME == 'PatchTST')
+        
+        n_var_in = cfg.MODEL.enc_in
+        n_var_out = cfg.MODEL.c_out if (is_pcd or is_patchtst_orig) else cfg.DATA.N_VAR
+        
+        return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var_in, n_var_out
     
     if not cfg.TTA.DUAL.CALI_MODULE:
         return None
     
-    seq_len, pred_len, n_var = get_model_dims(cfg)
+    seq_len, pred_len, n_var_in, n_var_out = get_model_dims(cfg)
+    
+    # 2. 基础参数（强制将真实的 seq_len 注入字典，覆盖默认值 96）
     params = {
         'hidden_dim': cfg.TTA.DUAL.HIDDEN_DIM,
         'gating_init': cfg.TTA.DUAL.GATING_INIT,
         'var_wise': cfg.TTA.DUAL.GCM_VAR_WISE,
+        'seq_len': seq_len  # <--- 核心修复，杜绝 144 的出现
     }
+    
     model_type = getattr(cfg.TTA.DUAL, 'CALI_NAME', 'tafas_GCM')
     
+    # 3. 合并所有超参数逻辑，彻底消灭 if-elif 冲突
+    if model_type in['CoBA_GCM', 'lowrank-coba-GCM', 'coba-online-only', 
+                      'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 
+                      'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 
+                      'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 
+                      'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
+        params.update({
+            'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
+            'n_static': cfg.TTA.DUAL.GCM_N_BASES,
+            'low_ranks': getattr(cfg.TTA.DUAL, 'LOWRANK_RANKS', 16),
+            'query_type': getattr(cfg.TTA.DUAL, 'QUERY_TYPE', 'freq-base-CI'),
+        })
+
     constructors = {
         'tafas-GCM': tafas_GCM,
         'petsa-GCM': petsa_GCM,
@@ -63,27 +85,6 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'CoBA_TF_Adapter': CoBA_TF_Adapter,
         'PKA_GCM': PKA_GCM,
     }
-    
-    if model_type == 'CoBA_GCM':
-        coba_params = {
-            'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
-        }
-        params.update(coba_params)
-    elif model_type in ['lowrank-coba-GCM', 'coba-online-only', 'CoBA-FreqDomain-GCM', 'CoBA-low-rank-FreqAdapter', 'CoBA_FreqDomain_ElementWise_GCM', 'RoCoBA_FreqDomain_GCM', 'EnCoBA_FreqDomain_GCM', 'RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
-        coba_params = {
-            'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
-            'low_ranks': getattr(cfg.TTA.DUAL, 'LOWRANK_RANKS', None),
-            'query_type': getattr(cfg.TTA.DUAL, 'QUERY_TYPE', 'freq-base-CI'),
-            'n_static': cfg.TTA.DUAL.GCM_N_BASES,
-        }
-        params.update(coba_params)
-    elif model_type in ['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
-        coba_params = {
-            'seq_len': cfg.DATA.SEQ_LEN,
-        }
-        params.update(coba_params)
-    elif model_type == 'identity':
-        return CalibrationContainer(None, None)
 
     ModelClass = constructors.get(model_type)
     if not ModelClass:
@@ -92,12 +93,17 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     in_model = None
     out_model = None
     
+    # 4. 实例化
     if cfg.TTA.DUAL.CALI_INPUT_ENABLE:
-        in_model = tafas_GCM(seq_len, n_var, **params)
+        in_model = tafas_GCM(seq_len, n_var_in, **params)
+        
     if cfg.TTA.DUAL.CALI_OUTPUT_ENABLE:
-        out_model = ModelClass(pred_len, n_var, **params)
+        # 【二次核心修复】：对于双输入模型，第一个位置参数 window_len 必须强制传 seq_len
+        if model_type in['RoCoBA_FreqDomain_Norm', 'CoBA_Freq_Adapter', 'Freq_Add_Adapter', 'CoBA_TF_Adapter', 'PKA_GCM']:
+            out_model = ModelClass(seq_len, n_var_out, **params)
+        else:
+            out_model = ModelClass(pred_len, n_var_out, **params)
 
-    print(params)
     return CalibrationContainer(in_model, out_model)
 
 def build_loss_fn(cfg) -> nn.Module:
@@ -239,7 +245,11 @@ class Adapter(nn.Module):
             cfg, 
             enabled=getattr(cfg.TTA, 'SAVE_ANALYSIS_DATA', True)
         )
-        self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
+        
+        if self.cfg.TTA.DOMAIN_SHIFT:
+            self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-2-{cfg.DATA.DOMAIN_SHIFT_TARGET}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
+        else:
+            self.visualizer = TTAVisualizer(save_dir=f"./visualize/{cfg.MODEL.NAME}-{cfg.DATA.NAME}-{cfg.DATA.PRED_LEN}/{self.save_name}", cfg=cfg)
 
     def _freeze_all(self):
         self.manager._freeze_all()
@@ -266,7 +276,11 @@ class Adapter(nn.Module):
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                         assert enc_window_all is not None, "enc_window_all should not be None for FreqDomain_Norm"
-                        pred = self.cali.output_calibration(pred, enc_window_all)
+                        # pred = self.cali.output_calibration(pred, enc_window_all)
+                        idx = self.cfg.DATA.TARGET_START_IDX if hasattr(self.cfg.DATA, 'TARGET_START_IDX') else 0
+                        c_out = self.cfg.MODEL.c_out
+                        enc_target = enc_window_all[:, :, idx : idx + c_out]
+                        pred = self.cali.output_calibration(pred, enc_target)
                     else:
                         pred = self.cali.output_calibration(pred)
                         
@@ -360,7 +374,15 @@ class Adapter(nn.Module):
                 if self.cali.output_calibration is not None:
                     if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                         enc_history = prepare_inputs(inputs_history)[0]
-                        pred = self.cali.output_calibration(pred, enc_history)
+                        target_idx = self.cfg.DATA.TARGET_START_IDX # 应该是 12
+                        c_out = self.cfg.MODEL.c_out # 2
+                        
+                        # 2. 对 20 维的原始输入进行切片，只取这 2 个维度
+                        # enc_window_all 形状: [Batch, 24, 20] -> [Batch, 24, 2]
+                        enc_target = enc_history[:, :, target_idx : target_idx + c_out]
+                        
+                        # 3. 传入切片后的数据。现在 pred(2维) 和 enc_target(2维) 可以在 dim 1 顺利拼接了！
+                        pred = self.cali.output_calibration(pred, enc_target)
                     else:
                         pred = self.cali.output_calibration(pred)
                 
@@ -403,7 +425,10 @@ class Adapter(nn.Module):
                 if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                     enc_window = prepare_inputs(inputs)[0]
                     # 这一步前向传播会计算并记录 Freq_Add_Adapter 的 relative_energy
-                    pred = self.cali.output_calibration(pred, enc_window)
+                    idx = self.cfg.DATA.TARGET_START_IDX
+                    c_out = self.cfg.MODEL.c_out
+                    enc_target = enc_window[:, :, idx : idx + c_out]
+                    pred = self.cali.output_calibration(pred, enc_target)
                 else:
                     pred = self.cali.output_calibration(pred)
             
@@ -442,7 +467,11 @@ class Adapter(nn.Module):
         if self.cali.output_calibration is not None:
             if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
                 enc_window = prepare_inputs(inputs)[0]
-                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
+                # pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_window)
+                idx = self.cfg.DATA.TARGET_START_IDX
+                c_out = self.cfg.MODEL.c_out
+                enc_target = enc_window[:, :, idx : idx + c_out]
+                pred_after_adapt = self.cali.output_calibration(pred_after_adapt, enc_target)
             else:
                 pred_after_adapt = self.cali.output_calibration(pred_after_adapt)
         

@@ -5,28 +5,32 @@
 ############################################
 
 # # 参与实验的模型
-MODELS=("iTransformerPCD" "OLSPCD" "MICNPCD" ) 
+MODELS=("PatchTSTPCD" "DLinearPCD") 
 # MODELS=("PatchTSTPCD")
 
 # 迁移对设定
 PAIRS=("eVED:eVED")
 
 # 迁移 ID 设置：455 预训练 -> 10 测试
-# TRAIN_IDS="['455']"
-# TEST_IDS="['10']"
+TRAIN_IDS="['455']"
+TEST_IDS="['10']"
 
-TRAIN_IDS="['10']"
-TEST_IDS="['455']"
+# TRAIN_IDS="['10']"
+# TEST_IDS="['455']"
 
 VAL_IDS=${TRAIN_IDS}
 TRAIN_IDS_CLEAN=$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")
 
 # COBA 核心超参数
 PRED_LENS=(24 48 96 192)
-export OFFLINE_LRS=(1e-1 5e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
-export ONLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+# export OFFLINE_LRS=(1e-1 5e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+# export ONLINE_LRS=(1e-1 5e-2 3e-2 1e-2 5e-3 1e-3 5e-4 1e-4 5e-5 1e-5)
+export OFFLINE_LRS=(1e-2)
+export ONLINE_LRS=(5e-3)
 BASE_NUMS=(32)          # Codebook 基向量数量
-LAMBDA_ORTHOS=(1.0)    # 正交约束权重
+LAMBDA_ORTHOS=(1e-3 1e-2 1e-1 0.0 1.0 10.0 100.0)    # 正交约束权重
+SEEDS=(0 1 2)          # 随机种子列表
+
 QUERY_TYPES=(time-CI)
 
 export TRAIN_IDS
@@ -36,7 +40,7 @@ export VAL_IDS
 # NPU 资源设置
 NPUS=(0 1 2 3)          
 NNPU=${#NPUS[@]}        
-PER_NPU=4              
+PER_NPU=4            
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -48,7 +52,6 @@ parallel --lb -j ${TOTAL_JOBS} '
     slot_idx=$(( ({%} - 1) % '"${NNPU}"' ))
     NPU_ID=${npu_array[$slot_idx]}
 
-    SEED=0
     MODEL={1} 
     PAIR={2}
     PRED_LEN={3}
@@ -57,15 +60,17 @@ parallel --lb -j ${TOTAL_JOBS} '
     N_BASES={6}
     QUERY_TYPE={7}
     LAMBDA_ORTHO={8}
+    SEED={9}
+
 
     DATASET=$(echo $PAIR | cut -d: -f1)
     TARGET=$(echo $PAIR | cut -d: -f2)
 
     # 路径根据 0327 训练好的 455 车模型设置
-    CHECKPOINT_DIR="./checkpoints/0331/${MODEL}/${DATASET}_${PRED_LEN}_1e-4_ep_30_10_2_455/"
-    RESULT_DIR="./results/0331_COBA3/10_2_455/${MODEL}/"
+    CHECKPOINT_DIR="./checkpoints/0327/${MODEL}/${DATASET}_${PRED_LEN}_1e-4_ep_30_455_2_10/"
+    RESULT_DIR="./results/0401/lambda_ablation/455_2_10/${LAMBDA_ORTHO}/"
 
-    echo "Job slot {%}: NPU=${NPU_ID} | MODEL=${MODEL} | COBA-Online | ${TRAIN_IDS} -> ${TEST_IDS} | PRED_LEN=${PRED_LEN}"
+    echo "Job slot {%}: NPU=${NPU_ID} | MODEL=${MODEL} | COBA-Online | ${TRAIN_IDS} -> ${TEST_IDS} | PRED_LEN=${PRED_LEN} | LAMBDA_ORTHO=${LAMBDA_ORTHO}"
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
 
     python main.py \
@@ -105,4 +110,4 @@ parallel --lb -j ${TOTAL_JOBS} '
         TTA.DUAL.CALI_INPUT_ENABLE False \
         TTA.DUAL.CALI_OUTPUT_ENABLE True \
         RESULT_DIR ${RESULT_DIR}
-' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${ONLINE_LRS[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${LAMBDA_ORTHOS[@]}"
+' ::: "${MODELS[@]}" ::: "${PAIRS[@]}" ::: "${PRED_LENS[@]}" ::: "${OFFLINE_LRS[@]}" ::: "${ONLINE_LRS[@]}" ::: "${BASE_NUMS[@]}" ::: "${QUERY_TYPES[@]}" ::: "${LAMBDA_ORTHOS[@]}" ::: "${SEEDS[@]}"

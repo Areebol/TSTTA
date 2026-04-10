@@ -3,7 +3,7 @@
 ############################################
 # 实验参数
 ############################################
-MODELS=("iTransformerPCD" "OLSPCD" "MICNPCD" )
+MODELS=("iTransformerPCD"  )
 # MODELS=("FreTSPCD")
 # MODELS=("LSTMPCI" "LSTMPCD")
 # MODELS=("OLSPCD")
@@ -16,16 +16,16 @@ PATCH_LENS=(8)
 # STRIDES=(8) # 4
 STRIDES=(4)
 # EPOCHS=(30)
-EPOCHS=(30)
+EPOCHS=(60)
 BATCH_SIZES=(256)
 LRS=(1e-4)
 
 # 核心ID参数
-# TRAIN_IDS="['455']"
-# TEST_IDS="['10']"
+TRAIN_IDS="['455']"
+TEST_IDS="['10']"
 
-TRAIN_IDS="['10']"
-TEST_IDS="['455']"
+# TRAIN_IDS="['10']"
+# TEST_IDS="['455']"
 
 VAL_IDS=${TRAIN_IDS}
 # Clean TRAIN_IDS for directory naming
@@ -39,7 +39,7 @@ export TRAIN_IDS_CLEAN
 NPUS=(0 1 2 3)          # 可用的 NPU ID
 NNPU=${#NPUS[@]}        # NPU 数量
 
-PER_NPU=1              # 每个 NPU 并行任务数
+PER_NPU=2             # 每个 NPU 并行任务数
 TOTAL_JOBS=$(( NNPU * PER_NPU ))
 
 NPU_STR="${NPUS[*]}"
@@ -62,7 +62,7 @@ parallel --lb -j ${TOTAL_JOBS} '
     BATCH_SIZE={8}
     LR={9}
 
-    CHECKPOINT_DIR="./checkpoints/0331/${MODEL}/${DATASET}_${PRED_LEN}_${LR}_ep_${EPOCH}_10_2_455/"
+    CHECKPOINT_DIR="./checkpoints/0401/${MODEL}/${DATASET}_${PRED_LEN}_${LR}_ep_${EPOCH}_455_2_10/"
     mkdir -p ${CHECKPOINT_DIR}
 
     echo "Job slot {%}: NPU=${NPU_ID} | MODEL=${MODEL} | ${TRAIN_IDS} -> ${TEST_IDS} | PRED_LEN=${PRED_LEN} | LR=${LR}"
@@ -85,7 +85,7 @@ parallel --lb -j ${TOTAL_JOBS} '
         MODEL.seq_len ${PRED_LEN} \
         MODEL.patch_len ${patch_len} \
         MODEL.stride ${stride} \
-        TRAIN.ENABLE False \
+        TRAIN.ENABLE True \
         SOLVER.MAX_EPOCH ${EPOCH} \
         TRAIN.BATCH_SIZE ${BATCH_SIZE} \
         SOLVER.BASE_LR ${LR} \

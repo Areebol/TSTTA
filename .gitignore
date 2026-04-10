@@ -28,3 +28,5 @@ checkpoints*/
 plots
 docs/
 *.json
+*.pdf
+vis_results/``

@@ -34,13 +34,16 @@ parallel --lb -j ${TOTAL_JOBS} '
     export ASCEND_RT_VISIBLE_DEVICES=${NPU_ID}
     # export CUDA_VISIBLE_DEVICES=${NPU_ID}
 
+    CHECKPOINT_DIR="./checkpoints/{1}/{2}_{3}_lr_{4}/"
+    mkdir -p ${CHECKPOINT_DIR}
+
     python main.py \
         DATA.NAME {2} \
         DATA.PRED_LEN {3} \
         MODEL.NAME {1} \
         MODEL.pred_len {3} \
-        TRAIN.ENABLE True \
-        TRAIN.CHECKPOINT_DIR checkpoints_revin/{1}/{2}_{3}_lr{4}/ \
+        TRAIN.ENABLE False \
+        TRAIN.CHECKPOINT_DIR ${CHECKPOINT_DIR} \
         SOLVER.BASE_LR ${LR} \
         NORM_MODULE.ENABLE ${NORM_MODULE_ENABLE} \
         NORM_MODULE.NAME ${NORM_MODULE_NAME} \
