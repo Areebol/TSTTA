@@ -120,6 +120,13 @@ class Model(nn.Module):
         self.task_name = configs.task_name
         self.pred_len = configs.pred_len
         self.seq_len = configs.seq_len
+        self.input_channels = configs.enc_in
+        self.output_channels = (
+            configs.c_out
+            if self.task_name in ["long_term_forecast", "short_term_forecast"]
+            else self.input_channels
+        )
+        self.target_start_idx = getattr(configs, "target_start_idx", 0)
 
         # Multi-scale Hybrid Decomposition
         self.decomp_multi = series_decomp_multi(decomp_kernel)
@@ -146,8 +153,10 @@ class Model(nn.Module):
             # [MODIFIED 2]: 新增全通道与全局时间信息融合层 (Global Fused Head)
             # 输入：预测长度 * d_model
             # 输出：预测长度 * 原始通道数(enc_in)
-            self.global_fused_projection = nn.Linear(configs.pred_len * configs.d_model, 
-                                                     configs.pred_len * configs.enc_in)
+            self.global_fused_projection = nn.Linear(
+                configs.pred_len * configs.d_model,
+                configs.pred_len * self.output_channels,
+            )
             self.head_dropout = nn.Dropout(configs.dropout)
 
         if self.task_name == 'imputation':
@@ -192,7 +201,10 @@ class Model(nn.Module):
         # ==============================================================
 
         # 将融合后的季节项预测与趋势项预测相加
-        dec_out = dec_out + trend[:, -self.pred_len:, :]
+        trend = trend[:, -self.pred_len:, :]
+        target_end = self.target_start_idx + self.output_channels
+        trend = trend[:, :, self.target_start_idx:target_end]
+        dec_out = dec_out + trend
         return dec_out
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):

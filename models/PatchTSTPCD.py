@@ -5,9 +5,12 @@ from layers.SelfAttention_Family import FullAttention, AttentionLayer
 from layers.Embed import PatchEmbedding
 
 class FusedFlattenHead(nn.Module):
-    def __init__(self, n_vars, nf, target_window, head_dropout=0):
+    def __init__(
+        self, input_vars, output_vars, nf, target_window, head_dropout=0
+    ):
         super().__init__()
-        self.n_vars = n_vars
+        self.input_vars = input_vars
+        self.output_vars = output_vars
         self.target_window = target_window
         
         # 1. 先把 (d_model, patch_num) 展平为 nf
@@ -15,9 +18,9 @@ class FusedFlattenHead(nn.Module):
         
         # 2. 计算输入输出的总维度
         # 输入维度: 变量数 * 每个变量的特征数 (patch_num * d_model)
-        self.input_dim = n_vars * nf
+        self.input_dim = input_vars * nf
         # 输出维度: 变量数 * 预测长度
-        self.output_dim = n_vars * target_window
+        self.output_dim = output_vars * target_window
         
         # 3. 全局融合线性层
         # 这个巨大的矩阵 W 充当了 LSTM 中 Projection 的角色
@@ -42,7 +45,7 @@ class FusedFlattenHead(nn.Module):
         
         # Step 4: 还原形状以匹配损失函数要求
         # -> [Batch, n_vars, target_window]
-        x = x.reshape(x.shape[0], self.n_vars, self.target_window)
+        x = x.reshape(x.shape[0], self.output_vars, self.target_window)
         
         return x
 
@@ -68,6 +71,9 @@ class Model(nn.Module):
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
+        self.input_vars = configs.enc_in
+        self.output_vars = configs.c_out
+        self.target_start_idx = getattr(configs, "target_start_idx", 0)
         
         # 获取配置
         patch_len = getattr(configs, "patch_len", 16)
@@ -101,8 +107,13 @@ class Model(nn.Module):
             if use_fused_head:
                 # 使用我们新写的融合 Head
                 print(f"Using FusedFlattenHead: Channel Interaction Enabled at Output Layer.")
-                self.head = FusedFlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
-                                             head_dropout=configs.dropout)
+                self.head = FusedFlattenHead(
+                    input_vars=self.input_vars,
+                    output_vars=self.output_vars,
+                    nf=self.head_nf,
+                    target_window=configs.pred_len,
+                    head_dropout=configs.dropout,
+                )
             else:
                 # 使用原始的独立 Head
                 self.head = FlattenHead(configs.enc_in, self.head_nf, configs.pred_len,
@@ -140,8 +151,11 @@ class Model(nn.Module):
         dec_out = dec_out.permute(0, 2, 1)
 
         # 6. De-Normalization
-        dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-        dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+        target_end = self.target_start_idx + self.output_vars
+        output_stdev = stdev[:, 0, self.target_start_idx:target_end]
+        output_means = means[:, 0, self.target_start_idx:target_end]
+        dec_out = dec_out * output_stdev.unsqueeze(1)
+        dec_out = dec_out + output_means.unsqueeze(1)
         
         return dec_out
 

@@ -9,15 +9,18 @@ import numpy as np
 # ==================== 统一 PCD 跨通道融合头 ====================
 class FusedLinearProjection(nn.Module):
     #  将 pred_len 抽象为 target_len，使其能够兼容预测(pred_len)和插补(seq_len)
-    def __init__(self, d_model, n_vars, target_len, head_dropout=0):
+    def __init__(
+        self, d_model, input_vars, output_vars, target_len, head_dropout=0
+    ):
         super().__init__()
         self.d_model = d_model
-        self.n_vars = n_vars
+        self.input_vars = input_vars
+        self.output_vars = output_vars
         self.target_len = target_len
         
         # iTransformer 专属维度适配
-        self.input_dim = n_vars * d_model
-        self.output_dim = n_vars * target_len
+        self.input_dim = input_vars * d_model
+        self.output_dim = output_vars * target_len
         
         self.linear_fusion = nn.Linear(self.input_dim, self.output_dim)
         self.dropout = nn.Dropout(head_dropout)
@@ -28,7 +31,7 @@ class FusedLinearProjection(nn.Module):
         x = self.linear_fusion(x)
         x = self.dropout(x)
         # 根据 target_len 还原形状
-        x = x.reshape(x.shape[0], self.n_vars, self.target_len)
+        x = x.reshape(x.shape[0], self.output_vars, self.target_len)
         return x
 
 # ==================== iTransformerPCD 主模型 ====================
@@ -40,6 +43,11 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
         self.output_attention = configs.output_attention
         self.n_vars = configs.enc_in
+        self.output_vars = (
+            configs.c_out
+            if self.task_name in ["long_term_forecast", "short_term_forecast"]
+            else self.n_vars
+        )
 
         # Embedding（原版不变）
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
@@ -77,7 +85,8 @@ class Model(nn.Module):
                 print(f"Using FusedLinearProjection: Channel Interaction Enabled for {self.task_name}.")
                 self.projection = FusedLinearProjection(
                     d_model=configs.d_model,
-                    n_vars=configs.enc_in,
+                    input_vars=configs.enc_in,
+                    output_vars=self.output_vars,
                     target_len=target_len,
                     head_dropout=configs.dropout
                 )
@@ -95,7 +104,10 @@ class Model(nn.Module):
         _, _, N = x_enc.shape
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
-        dec_out = self.projection(enc_out).permute(0, 2, 1)[:, :, :N]
+        # DataEmbedding_inverted appends timestamp covariates as extra tokens.
+        # The fused PCD head is defined over the N input-variable tokens only.
+        variable_tokens = enc_out[:, :N, :]
+        dec_out = self.projection(variable_tokens).permute(0, 2, 1)
         if self.output_attention: return dec_out, attns, enc_out
         else: return dec_out
 
@@ -109,7 +121,8 @@ class Model(nn.Module):
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
 
-        dec_out = self.projection(enc_out).permute(0, 2, 1)[:, :, :N]
+        variable_tokens = enc_out[:, :N, :]
+        dec_out = self.projection(variable_tokens).permute(0, 2, 1)
         dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, L, 1))
         dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, L, 1))
         return dec_out
@@ -124,7 +137,8 @@ class Model(nn.Module):
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
 
-        dec_out = self.projection(enc_out).permute(0, 2, 1)[:, :, :N]
+        variable_tokens = enc_out[:, :N, :]
+        dec_out = self.projection(variable_tokens).permute(0, 2, 1)
         dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, L, 1))
         dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, L, 1))
         return dec_out

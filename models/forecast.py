@@ -43,7 +43,18 @@ def forecast(
     else:
         pred = model(enc_window, enc_window_stamp, dec_window, dec_window_stamp)
     
-    pred = pred[:, -cfg.DATA.PRED_LEN:, start:target_end]
+    pred = pred[:, -cfg.DATA.PRED_LEN:, :]
+    if pred.shape[-1] == cfg.MODEL.c_out:
+        # PCD models and other direct-output models return c_out channels.
+        pass
+    elif pred.shape[-1] >= target_end:
+        # Legacy models return all channels and targets are selected here.
+        pred = pred[:, :, start:target_end]
+    else:
+        raise ValueError(
+            f"Model returned {pred.shape[-1]} channels, but c_out={cfg.MODEL.c_out} "
+            f"and target slice [{start}:{target_end}] was requested."
+        )
 
     # De-normalize only for Non-stationary Transformer path
     if norm_method == 'SAN':

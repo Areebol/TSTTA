@@ -9,16 +9,19 @@ class FusedFlattenHead(nn.Module):
     """
     适配 DLinear 的全局通道融合输出头
     """
-    def __init__(self, n_vars, seq_len, pred_len, head_dropout=0.0):
+    def __init__(
+        self, input_vars, output_vars, seq_len, pred_len, head_dropout=0.0
+    ):
         super().__init__()
-        self.n_vars = n_vars
+        self.input_vars = input_vars
+        self.output_vars = output_vars
         self.seq_len = seq_len
         self.pred_len = pred_len
         
         # 输入维度: 变量数 * 历史序列长度
-        self.input_dim = n_vars * seq_len
+        self.input_dim = input_vars * seq_len
         # 输出维度: 变量数 * 预测长度
-        self.output_dim = n_vars * pred_len
+        self.output_dim = output_vars * pred_len
         
         # 全局融合线性层：负责跨通道与跨时间的双重信息提取
         self.linear_fusion = nn.Linear(self.input_dim, self.output_dim)
@@ -35,7 +38,7 @@ class FusedFlattenHead(nn.Module):
         x = self.dropout(x)
         
         # Step 3: 还原形状以匹配预期输出 -> [Batch, n_vars, pred_len]
-        x = x.reshape(x.shape[0], self.n_vars, self.pred_len)
+        x = x.reshape(x.shape[0], self.output_vars, self.pred_len)
         
         return x
 
@@ -50,6 +53,7 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
         self.channels = configs.enc_in 
+        self.output_channels = configs.c_out
         self.dropout = getattr(configs, 'dropout', 0.1)
         
         # 1. 序列分解模块
@@ -58,14 +62,16 @@ class Model(nn.Module):
         # 2. 替换原本的独立/共享 Linear 层，使用全新的 FusedFlattenHead
         # 季节性项的全局融合头
         self.Head_Seasonal = FusedFlattenHead(
-            n_vars=self.channels, 
+            input_vars=self.channels,
+            output_vars=self.output_channels,
             seq_len=self.seq_len, 
             pred_len=self.pred_len, 
             head_dropout=self.dropout
         )
         # 趋势项的全局融合头
         self.Head_Trend = FusedFlattenHead(
-            n_vars=self.channels, 
+            input_vars=self.channels,
+            output_vars=self.output_channels,
             seq_len=self.seq_len, 
             pred_len=self.pred_len, 
             head_dropout=self.dropout

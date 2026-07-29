@@ -285,3 +285,6 @@ def update_cfg_from_dataset(cfg: CN, dataset_name: str):
         # cfg.MODEL.c_out = n_var
     else:
         raise ValueError
+    # Models that emit only c_out channels need the dataset-specific target
+    # position for internal trend selection or de-normalization.
+    cfg.MODEL.target_start_idx = cfg.DATA.TARGET_START_IDX

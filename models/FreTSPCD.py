@@ -5,32 +5,35 @@ import numpy as np
 
 # ==================== 统一PCD跨通道融合头（严格对齐PatchTSTPCD） ====================
 class FusedFlattenHead(nn.Module):
-    def __init__(self, seq_len, embed_size, hidden_size, n_vars, pred_len, head_dropout=0.):
+    def __init__(self,seq_len,embed_size, n_vars,n_outputs,pred_len,head_dropout=0.,
+    ):
         super().__init__()
         self.n_vars = n_vars
+        self.n_outputs = n_outputs
         self.pred_len = pred_len
         
         # 适配FreTS维度：输入 = 变量数 × (seq_len × embed_size)
         self.input_dim = n_vars * (seq_len * embed_size)
-        self.output_dim = n_vars * pred_len
+        self.output_dim = n_outputs * pred_len
         
-        # 跨通道全局融合层
-        self.fusion = nn.Sequential(
-            nn.Linear(self.input_dim, hidden_size),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_size, self.output_dim),
-            nn.Dropout(head_dropout)
-        )
+        # 与 PatchTSTPCD 对齐：使用单个全局线性层完成跨通道融合与预测。
+        self.linear_fusion = nn.Linear(self.input_dim, self.output_dim)
+        self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):
         # x: [B, n_vars, seq_len*embed_size]
         B, n_vars, _ = x.shape
+        if n_vars != self.n_vars:
+            raise ValueError(
+                f"Expected {self.n_vars} input variables, but received {n_vars}."
+            )
         # 核心：展平所有变量特征，实现跨通道交互
         x = x.reshape(B, -1)
         # 全局融合预测
-        x = self.fusion(x)
-        # 重塑为输出格式 [B, n_vars, pred_len]
-        x = x.reshape(B, n_vars, self.pred_len)
+        x = self.linear_fusion(x)
+        x = self.dropout(x)
+        # Reshape to [B, n_outputs, pred_len].
+        x = x.reshape(B, self.n_outputs, self.pred_len)
         return x
 
 
@@ -50,6 +53,7 @@ class Model(nn.Module):
         self.hidden_size = 256  # hidden_size
         self.pred_len = configs.pred_len
         self.feature_size = configs.enc_in  # channels
+        self.output_size = configs.c_out
         self.seq_len = configs.seq_len
         self.channel_independence = configs.channel_independence
         self.sparsity_threshold = 0.01
@@ -76,8 +80,8 @@ class Model(nn.Module):
             self.fc = FusedFlattenHead(
                 seq_len=self.seq_len,
                 embed_size=self.embed_size,
-                hidden_size=self.hidden_size,
                 n_vars=self.feature_size,
+                n_outputs=self.output_size,
                 pred_len=self.pred_len,
                 head_dropout=self.dropout
             )

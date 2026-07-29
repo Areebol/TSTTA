@@ -27,6 +27,7 @@ checkpoints*/
 *.npz
 plots
 docs/
+logs/
 *.json
 
 vis_results/

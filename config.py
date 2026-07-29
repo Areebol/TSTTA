@@ -344,6 +344,8 @@ _C.MODEL.LOSS_NAMES = ('MSE',)
 _C.MODEL.embed = 'timeF'
 _C.MODEL.freq = 'h'
 _C.MODEL.ignore_stamp = False
+# Target position used by models that directly emit c_out channels.
+_C.MODEL.target_start_idx = _C.DATA.TARGET_START_IDX
 # OLS params
 _C.MODEL.instance_norm = True
 _C.MODEL.individual = False

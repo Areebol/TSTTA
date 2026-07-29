@@ -485,7 +485,6 @@ class Trainer:
         checkpoint = {
             "epoch": self.cur_epoch,
             "model_state": self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
             "cfg": self.cfg.dump(),
         }
 

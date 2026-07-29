@@ -12,14 +12,17 @@ class FusedLinearHead(nn.Module):
     OLSPCD 核心：全局跨变量/通道特征融合预测头
     坚持 OLS 的纯线性先验：移除所有 ReLU 和隐藏层，仅保留一个跨通道映射的 Linear。
     """
-    def __init__(self, input_dim, n_vars, pred_len, head_dropout=0.):
+    def __init__(
+        self, input_dim, input_vars, output_vars, pred_len, head_dropout=0.
+    ):
         super().__init__()
-        self.n_vars = n_vars
+        self.input_vars = input_vars
+        self.output_vars = output_vars
         self.pred_len = pred_len
 
         # 全局融合：所有变量的特征平铺拼接
-        self.input_dim = n_vars * input_dim
-        self.output_dim = n_vars * pred_len
+        self.input_dim = input_vars * input_dim
+        self.output_dim = output_vars * pred_len
 
         # 纯线性全局映射（仅修改：bias=False）
         self.linear_fusion = nn.Linear(self.input_dim, self.output_dim, bias=False)
@@ -35,7 +38,7 @@ class FusedLinearHead(nn.Module):
         x = self.linear_fusion(x)  # [Batch, n_vars * pred_len]
 
         # 3. 还原回独立通道的形状以便后续框架处理
-        x = x.reshape(B, n_vars, self.pred_len)  # [Batch, n_vars, pred_len]
+        x = x.reshape(B, self.output_vars, self.pred_len)
         return x
 
 
@@ -56,6 +59,9 @@ class Model(nn.Module):
 
         # ==================== PCD 核心开关（默认开启融合头） ====================
         self.use_fused_head = getattr(cfg, "use_fused_head", True)
+        self.outputs_targets = self.use_fused_head and not self.individual
+        self.output_vars = cfg.c_out if self.outputs_targets else self.n_vars
+        self.target_start_idx = getattr(cfg, "target_start_idx", 0)
 
         # Disable 'fit_intercept' in Ridge regresion when instance normalization is used.
         fit_intercept = False if self.instance_norm else True
@@ -89,7 +95,8 @@ class Model(nn.Module):
                 print("OLSPCD Using FusedLinearHead: Linear Channel Interaction Enabled at Output Layer.")
                 self.linear = FusedLinearHead(
                     input_dim=self.linear_input_dim,
-                    n_vars=self.n_vars,
+                    input_vars=self.n_vars,
+                    output_vars=self.output_vars,
                     pred_len=self.horizon,
                     head_dropout=self.dropout
                 )
@@ -123,6 +130,12 @@ class Model(nn.Module):
             dec_windows = dec_windows - means
 
             enc_windows = torch.concat([enc_windows, stdev], dim=1)
+
+        if self.outputs_targets:
+            target_end = self.target_start_idx + self.output_vars
+            dec_windows = dec_windows[
+                :, :, self.target_start_idx:target_end
+            ]
 
         if self.verbose:
             print('Fitting')
@@ -219,6 +232,9 @@ class Model(nn.Module):
             preds = pred.permute(0, 2, 1)
 
         if self.instance_norm:
+            if self.outputs_targets:
+                target_end = self.target_start_idx + self.output_vars
+                means = means[:, :, self.target_start_idx:target_end]
             return preds + means  # Undo instance norm
         else:
             return preds
