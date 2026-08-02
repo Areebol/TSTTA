@@ -15,7 +15,7 @@ MODELS=(
     "DLinearPCD"
     "iTransformerPCD"
     "MICNPCD"
-    "OLSPCD"
+    # "OLSPCD"
 )
 PRED_LENS=(24 48 96 192)
 
@@ -28,11 +28,11 @@ EPOCHS="${EPOCHS:-30}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 LR="${LR:-1e-4}"
-GPU_ID="${GPU_ID:-2,3}"
+GPU_ID="${GPU_ID:-0,1}"
 
-TRAIN_IDS="${TRAIN_IDS:-['455']}"
+TRAIN_IDS="${TRAIN_IDS:-['10']}"
 VAL_IDS="${VAL_IDS:-${TRAIN_IDS}}"
-TEST_IDS="${TEST_IDS:-['10']}"
+TEST_IDS="${TEST_IDS:-['455']}"
 
 TRAIN_IDS_CLEAN="$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")"
 TEST_IDS_CLEAN="$(echo "${TEST_IDS}" | tr -d "[]'\" ")"

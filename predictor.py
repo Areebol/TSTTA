@@ -99,7 +99,20 @@ class Predictor:
                 pred = pred[0]
             
             # pred = pred[:, -self.cfg.DATA.PRED_LEN:, self.cfg.DATA.TARGET_START_IDX:]
-            pred = pred[:, -self.cfg.DATA.PRED_LEN:, target_start:target_end]
+            # pred = pred[:, -self.cfg.DATA.PRED_LEN:, target_start:target_end]
+            pred = pred[:, -self.cfg.DATA.PRED_LEN:, :]
+            if pred.shape[-1] == self.cfg.MODEL.c_out:
+                # New PCD models directly return the two target channels.
+                pass
+            elif pred.shape[-1] >= target_end:
+                # Legacy PCD models return all input channels.
+                pred = pred[:, :, target_start:target_end]
+            else:
+                raise ValueError(
+                    f"Model returned {pred.shape[-1]} channels, but c_out="
+                    f"{self.cfg.MODEL.c_out} and target slice "
+                    f"[{target_start}:{target_end}] was requested."
+                )
             
             if self.norm_method == 'SAN':
                 pred = self.norm_module.de_normalize(pred, statistics_pred)

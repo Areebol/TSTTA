@@ -4,7 +4,6 @@ import numpy as np
 from sklearn.linear_model import Ridge
 
 from utils.misc import prepare_inputs
-from device_manager import global_device
 
 # ==================== 统一 PCD 跨通道融合头（纯线性版） ====================
 class FusedLinearHead(nn.Module):
@@ -30,6 +29,12 @@ class FusedLinearHead(nn.Module):
     def forward(self, x):
         # x 形状: [Batch, n_vars, input_dim]
         B, n_vars, _ = x.shape
+
+        if n_vars != self.input_vars:
+            raise ValueError(
+                f"FusedLinearHead expected {self.input_vars} input channels, "
+                f"but received {n_vars}."
+            )
 
         # 1. 展平所有变量，打破通道独立，实现跨通道线性交互
         x = x.reshape(B, -1)  # [Batch, n_vars * input_dim]
@@ -63,11 +68,26 @@ class Model(nn.Module):
         self.output_vars = cfg.c_out if self.outputs_targets else self.n_vars
         self.target_start_idx = getattr(cfg, "target_start_idx", 0)
 
+        # Absolute alpha=1e-6 is too small for the highly collinear fused eVED
+        # design matrix.  The relative floor bounds the condition number of the
+        # regularized inverse while still allowing cfg.alpha to request stronger
+        # regularization.  No training-script option is required.
+        self.ridge_relative_floor = float(
+            getattr(cfg, "ridge_relative_floor", 1e-6)
+        )
+
         # Disable 'fit_intercept' in Ridge regresion when instance normalization is used.
         fit_intercept = False if self.instance_norm else True
 
-        # 计算输入特征维度（考虑到 instance_norm 会在特征末尾追加 stdev）
-        self.linear_input_dim = self.context_length + 1 if self.instance_norm else self.context_length
+        # Keep the exact feature layout used by the original 20-channel
+        # OLSPCD checkpoint.  In particular, instance_norm appends one stdev
+        # value per input channel, so old weights have
+        # input_vars * (seq_len + 1) input features.
+        self.linear_input_dim = (
+            self.context_length + 1
+            if self.instance_norm
+            else self.context_length
+        )
 
         if self.individual:
             # 原版独立通道模型（基于 sklearn 的 Ridge，无修改）
@@ -123,16 +143,30 @@ class Model(nn.Module):
         dec_windows = torch.cat(dec_windows, dim=0)
 
         if self.instance_norm:
+            # Preserve the original OLSPCD fitting convention exactly.  This
+            # is required so rows sliced from a legacy 20-channel checkpoint
+            # remain prediction-equivalent in the compact 2-channel model.
             means = enc_windows.mean(1, keepdim=True).detach()
-            stdev = torch.sqrt(torch.var(enc_windows, dim=1, keepdim=True, unbiased=False) + 1e-5)
-
+            stdev = torch.sqrt(
+                torch.var(
+                    enc_windows,
+                    dim=1,
+                    keepdim=True,
+                    unbiased=False,
+                )
+                + 1e-5
+            )
             enc_windows = enc_windows - means
             dec_windows = dec_windows - means
-
             enc_windows = torch.concat([enc_windows, stdev], dim=1)
 
         if self.outputs_targets:
             target_end = self.target_start_idx + self.output_vars
+            if self.target_start_idx < 0 or target_end > dec_windows.shape[-1]:
+                raise ValueError(
+                    f"Invalid target slice [{self.target_start_idx}:{target_end}] "
+                    f"for decoder with {dec_windows.shape[-1]} channels."
+                )
             dec_windows = dec_windows[
                 :, :, self.target_start_idx:target_end
             ]
@@ -181,22 +215,106 @@ class Model(nn.Module):
                 # 形状变为: (batch * var, pred_len)
                 dec_windows = dec_windows.reshape(-1, dec_windows.shape[-1])
 
-            # svd solver
-            U, S, V = torch.svd(enc_windows)
-            S_diag = torch.diag(S)
-
-            S_inv = torch.inverse(
-                S_diag ** 2 + self.alpha * torch.eye(S_diag.shape[0]).to(global_device)
+            weight_matrix = self._solve_fused_ridge(
+                enc_windows,
+                dec_windows,
             )
-            weight_matrix = (V @ S_inv @ (S_diag @ U.t() @ dec_windows)).t()
 
             # ==================== 权重赋值路由 ====================
             if self.use_fused_head:
                 # 赋值给嵌套在 FusedLinearHead 内层的 nn.Linear
-                self.linear.linear_fusion.weight.data = weight_matrix
+                expected_shape = self.linear.linear_fusion.weight.shape
+                if weight_matrix.shape != expected_shape:
+                    raise RuntimeError(
+                        f"Solved OLSPCD weight has shape {tuple(weight_matrix.shape)}, "
+                        f"expected {tuple(expected_shape)}."
+                    )
+                if not torch.isfinite(weight_matrix).all():
+                    raise FloatingPointError(
+                        "OLSPCD ridge solver produced NaN or Inf weights."
+                    )
+                with torch.no_grad():
+                    self.linear.linear_fusion.weight.copy_(weight_matrix)
             else:
                 # 原版赋值给直接的 nn.Linear
-                self.linear.weight.data = weight_matrix
+                with torch.no_grad():
+                    self.linear.weight.copy_(weight_matrix)
+
+    @torch.no_grad()
+    def _solve_fused_ridge(self, x, y):
+        """Solve a multi-output ridge regression without an explicit inverse.
+
+        x: [num_windows, input_vars * seq_len]
+        y: [num_windows, output_vars * pred_len]
+
+        The previous implementation explicitly inverted diag(S**2 + alpha)
+        with alpha=1e-6 in float32.  On the collinear eVED matrix this makes
+        the solution highly dependent on the CUDA/NPU SVD implementation.
+        Here we use torch.linalg.svd and a scale-aware ridge floor.
+        """
+        if x.ndim != 2 or y.ndim != 2:
+            raise ValueError(
+                f"Ridge solver expects 2-D tensors, got x={x.shape}, y={y.shape}."
+            )
+        if x.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"Ridge sample mismatch: x has {x.shape[0]}, y has {y.shape[0]}."
+            )
+
+        # torch.linalg.svd(full_matrices=False) avoids the unnecessarily large
+        # full U matrix and is the supported replacement for torch.svd.
+        u, singular_values, vh = torch.linalg.svd(
+            x,
+            full_matrices=False,
+        )
+
+        if singular_values.numel() == 0:
+            raise RuntimeError("OLSPCD ridge solver received an empty design matrix.")
+
+        largest_squared = singular_values[0].square()
+        absolute_alpha = torch.as_tensor(
+            max(float(self.alpha), 0.0),
+            dtype=singular_values.dtype,
+            device=singular_values.device,
+        )
+        relative_alpha = largest_squared * self.ridge_relative_floor
+        effective_alpha = torch.maximum(absolute_alpha, relative_alpha)
+
+        # V @ diag(S / (S^2 + lambda)) @ U.T @ Y, implemented without
+        # materializing either a diagonal matrix or its inverse.
+        projected_y = u.transpose(0, 1) @ y
+        ridge_gain = singular_values / (
+            singular_values.square() + effective_alpha
+        )
+        coefficients = vh.transpose(0, 1) @ (
+            ridge_gain.unsqueeze(1) * projected_y
+        )
+        weight_matrix = coefficients.transpose(0, 1).contiguous()
+
+        smallest_squared = singular_values[-1].square()
+        regularized_condition = (
+            (largest_squared + effective_alpha)
+            / (smallest_squared + effective_alpha)
+        )
+        if self.verbose:
+            print(
+                "OLSPCD ridge diagnostics: "
+                f"samples={x.shape[0]}, features={x.shape[1]}, "
+                f"outputs={y.shape[1]}, "
+                f"effective_alpha={effective_alpha.item():.6e}, "
+                f"regularized_condition={regularized_condition.item():.6e}, "
+                f"max_abs_weight={weight_matrix.abs().max().item():.6e}"
+            )
+
+        target_weight = (
+            self.linear.linear_fusion.weight
+            if self.use_fused_head
+            else self.linear.weight
+        )
+        return weight_matrix.to(
+            device=target_weight.device,
+            dtype=target_weight.dtype,
+        )
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         """
@@ -204,6 +322,8 @@ class Model(nn.Module):
         """
         # 注意：这里的 x_enc 原始形状是 [B, seq_len, n_vars]
         x_dec = x_dec[:, -self.horizon:, :]
+        # Keep the original OLSPCD forward normalization so a compact head
+        # produced by slicing legacy weights gives the same target prediction.
         if self.instance_norm:
             means = x_enc.mean(1, keepdim=True).detach()
             x_enc = x_enc - means
