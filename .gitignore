@@ -27,6 +27,9 @@ checkpoints*/
 *.npz
 plots
 docs/
+!docs/
+docs/*
+!docs/TPA_online_knowledge_management.md
 logs/
 *.json
 

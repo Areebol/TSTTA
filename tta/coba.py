@@ -19,6 +19,7 @@ from datasets.loader import get_test_dataloader, get_tta_train_dataloader, get_d
 from tta.loss import *
 from tta.tta_dual_utils.GCM import *
 from tta.pattern_bank import *
+from tta.tpa_memory import TPAPrototypeAdapter
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.utils import save_tta_results
 from device_manager import global_device
@@ -29,7 +30,10 @@ from device_manager import global_device
 def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
     def get_model_dims(cfg):
         is_patchtst = (cfg.MODEL.NAME == 'PatchTST')
-        n_var = cfg.MODEL.c_out if is_patchtst else cfg.DATA.N_VAR
+        is_tpa = (
+            getattr(cfg.TTA.DUAL, 'CALI_NAME', '') == 'TPAPrototypeAdapter'
+        )
+        n_var = cfg.MODEL.c_out if (is_patchtst or is_tpa) else cfg.DATA.N_VAR
         return cfg.DATA.SEQ_LEN, cfg.DATA.PRED_LEN, n_var
     
     if not cfg.TTA.DUAL.CALI_MODULE:
@@ -59,10 +63,20 @@ def build_calibration_module(cfg) -> Optional[CalibrationContainer]:
         'CoBA_Freq_Adapter': CoBA_Freq_Adapter,
         'Freq_Add_Adapter': Freq_Add_Adapter, 
         'CoBA_TF_Adapter': CoBA_TF_Adapter,
+        'TPAPrototypeAdapter': TPAPrototypeAdapter,
         'PKA_GCM': PKA_GCM,
     }
     
-    if model_type == 'CoBA_GCM':
+    if model_type == 'TPAPrototypeAdapter':
+        tpa_params = {
+            'seq_len': cfg.DATA.SEQ_LEN,
+            'feature_dim': cfg.TTA.DUAL.GCM_FEA_DIM,
+            'n_static': cfg.TTA.TPA.N_SOURCE,
+            'n_online': cfg.TTA.TPA.N_ONLINE,
+            'target_start_idx': cfg.DATA.TARGET_START_IDX,
+        }
+        params.update(tpa_params)
+    elif model_type == 'CoBA_GCM':
         coba_params = {
             'n_bases': cfg.TTA.DUAL.GCM_N_BASES,
         }

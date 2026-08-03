@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import hashlib
 from sklearn.linear_model import Ridge
-
-from utils.misc import prepare_inputs
+from torch.utils.data import RandomSampler
 
 # ==================== 统一 PCD 跨通道融合头（纯线性版） ====================
 class FusedLinearHead(nn.Module):
@@ -67,14 +67,7 @@ class Model(nn.Module):
         self.outputs_targets = self.use_fused_head and not self.individual
         self.output_vars = cfg.c_out if self.outputs_targets else self.n_vars
         self.target_start_idx = getattr(cfg, "target_start_idx", 0)
-
-        # Absolute alpha=1e-6 is too small for the highly collinear fused eVED
-        # design matrix.  The relative floor bounds the condition number of the
-        # regularized inverse while still allowing cfg.alpha to request stronger
-        # regularization.  No training-script option is required.
-        self.ridge_relative_floor = float(
-            getattr(cfg, "ridge_relative_floor", 1e-6)
-        )
+        self._fit_metadata = {}
 
         # Disable 'fit_intercept' in Ridge regresion when instance normalization is used.
         fit_intercept = False if self.instance_norm else True
@@ -130,22 +123,45 @@ class Model(nn.Module):
         """
         Fit the OLS solutions for each series or in a global mode.
         """
+        # A closed-form solution must always see the same complete design
+        # matrix. Random sampling plus drop_last silently changes that matrix.
+        if getattr(train_loader, "drop_last", False):
+            raise ValueError("OLSPCD requires train_loader.drop_last=False.")
+        if isinstance(getattr(train_loader, "sampler", None), RandomSampler):
+            raise ValueError("OLSPCD requires a non-shuffled train loader.")
+
         enc_windows = []
         dec_windows = []
 
         for inputs in train_loader:
-            enc_window, _, dec_window, _ = prepare_inputs(inputs)
+            if not isinstance(inputs, (tuple, list)) or len(inputs) < 3:
+                raise TypeError(
+                    "OLSPCD expects each loader batch to contain "
+                    "(enc_window, enc_mark, dec_window, dec_mark)."
+                )
+            enc_window, _, dec_window, _ = inputs
+            if not torch.is_tensor(enc_window) or not torch.is_tensor(dec_window):
+                raise TypeError("OLSPCD encoder/decoder windows must be tensors.")
+
+            # Canonical preprocessing is performed on CPU float32 so feature
+            # construction is independent of CUDA/NPU kernels. The linear
+            # algebra itself is promoted to float64 below.
+            enc_window = enc_window.detach().to(device="cpu", dtype=torch.float32)
+            dec_window = dec_window.detach().to(device="cpu", dtype=torch.float32)
             dec_window = dec_window[:, -self.horizon:, :]
             enc_windows.append(enc_window)
             dec_windows.append(dec_window)
+
+        if not enc_windows:
+            raise RuntimeError("OLSPCD received an empty training loader.")
 
         enc_windows = torch.cat(enc_windows, dim=0)
         dec_windows = torch.cat(dec_windows, dim=0)
 
         if self.instance_norm:
-            # Preserve the original OLSPCD fitting convention exactly.  This
-            # is required so rows sliced from a legacy 20-channel checkpoint
-            # remain prediction-equivalent in the compact 2-channel model.
+            # Preserve the feature construction used by the original OLSPCD
+            # closed-form fit: center each raw window and append one raw-scale
+            # standard-deviation feature per channel.
             means = enc_windows.mean(1, keepdim=True).detach()
             stdev = torch.sqrt(
                 torch.var(
@@ -215,7 +231,7 @@ class Model(nn.Module):
                 # 形状变为: (batch * var, pred_len)
                 dec_windows = dec_windows.reshape(-1, dec_windows.shape[-1])
 
-            weight_matrix = self._solve_fused_ridge(
+            weight_matrix, solver_metadata = self._solve_fused_ridge(
                 enc_windows,
                 dec_windows,
             )
@@ -240,17 +256,47 @@ class Model(nn.Module):
                 with torch.no_grad():
                     self.linear.weight.copy_(weight_matrix)
 
+            saved_weight = (
+                self.linear.linear_fusion.weight
+                if self.use_fused_head
+                else self.linear.weight
+            )
+            weight_bytes = (
+                saved_weight.detach().cpu().contiguous().numpy().tobytes()
+            )
+            self._fit_metadata = {
+                **solver_metadata,
+                "input_channels": int(self.n_vars),
+                "output_channels": int(self.output_vars),
+                "target_start_idx": int(self.target_start_idx),
+                "instance_norm": bool(self.instance_norm),
+                "fit_preprocessing": "legacy_olspcd_instance_norm",
+                "train_batches": int(len(train_loader)),
+                "train_drop_last": bool(
+                    getattr(train_loader, "drop_last", False)
+                ),
+                "train_sampler": type(
+                    getattr(train_loader, "sampler", None)
+                ).__name__,
+                "saved_weight_dtype": str(saved_weight.dtype),
+                "saved_weight_shape": tuple(saved_weight.shape),
+                "saved_weight_sha256": hashlib.sha256(weight_bytes).hexdigest(),
+                "torch_version": str(torch.__version__),
+                "numpy_version": str(np.__version__),
+            }
+
     @torch.no_grad()
     def _solve_fused_ridge(self, x, y):
-        """Solve a multi-output ridge regression without an explicit inverse.
+        """Solve fixed-alpha ridge regression on canonical CPU float64 data.
 
         x: [num_windows, input_vars * seq_len]
         y: [num_windows, output_vars * pred_len]
 
-        The previous implementation explicitly inverted diag(S**2 + alpha)
-        with alpha=1e-6 in float32.  On the collinear eVED matrix this makes
-        the solution highly dependent on the CUDA/NPU SVD implementation.
-        Here we use torch.linalg.svd and a scale-aware ridge floor.
+        The previous implementation ran float32 SVD on the active accelerator
+        and explicitly inverted diag(S**2 + alpha). Both choices make the
+        highly collinear eVED solution device-dependent. This implementation
+        keeps the configured alpha unchanged, computes on CPU float64, and
+        applies the stable S / (S**2 + alpha) ridge gain directly.
         """
         if x.ndim != 2 or y.ndim != 2:
             raise ValueError(
@@ -261,47 +307,69 @@ class Model(nn.Module):
                 f"Ridge sample mismatch: x has {x.shape[0]}, y has {y.shape[0]}."
             )
 
-        # torch.linalg.svd(full_matrices=False) avoids the unnecessarily large
-        # full U matrix and is the supported replacement for torch.svd.
-        u, singular_values, vh = torch.linalg.svd(
-            x,
-            full_matrices=False,
-        )
+        x64 = x.detach().to(device="cpu", dtype=torch.float64)
+        y64 = y.detach().to(device="cpu", dtype=torch.float64)
+        x_bytes = memoryview(
+            x.detach().cpu().contiguous().numpy()
+        ).cast("B")
+        y_bytes = memoryview(
+            y.detach().cpu().contiguous().numpy()
+        ).cast("B")
+        design_sha256 = hashlib.sha256(x_bytes).hexdigest()
+        target_sha256 = hashlib.sha256(y_bytes).hexdigest()
 
-        if singular_values.numel() == 0:
-            raise RuntimeError("OLSPCD ridge solver received an empty design matrix.")
+        alpha_value = float(self.alpha)
+        if not np.isfinite(alpha_value) or alpha_value <= 0:
+            raise ValueError(
+                f"OLSPCD alpha must be finite and positive: {self.alpha}"
+            )
+
+        # Keep the LAPACK reduction order fixed within one software stack.
+        # The training script also fixes OMP/MKL/OpenBLAS thread counts before
+        # Python starts, which is required for repeatable CPU linear algebra.
+        previous_num_threads = torch.get_num_threads()
+        torch.set_num_threads(1)
+        try:
+            u, singular_values, vh = torch.linalg.svd(
+                x64,
+                full_matrices=False,
+            )
+            if singular_values.numel() == 0:
+                raise RuntimeError(
+                    "OLSPCD ridge solver received an empty design matrix."
+                )
+
+            alpha = torch.as_tensor(
+                alpha_value,
+                dtype=singular_values.dtype,
+                device=singular_values.device,
+            )
+            projected_y = u.transpose(0, 1) @ y64
+
+            # V @ diag(S / (S^2 + alpha)) @ U.T @ Y, implemented
+            # without materializing a diagonal matrix or its inverse.
+            ridge_gain = singular_values / (
+                singular_values.square() + alpha
+            )
+            coefficients = vh.transpose(0, 1) @ (
+                ridge_gain.unsqueeze(1) * projected_y
+            )
+            weight_matrix = coefficients.transpose(0, 1).contiguous()
+        finally:
+            torch.set_num_threads(previous_num_threads)
 
         largest_squared = singular_values[0].square()
-        absolute_alpha = torch.as_tensor(
-            max(float(self.alpha), 0.0),
-            dtype=singular_values.dtype,
-            device=singular_values.device,
-        )
-        relative_alpha = largest_squared * self.ridge_relative_floor
-        effective_alpha = torch.maximum(absolute_alpha, relative_alpha)
-
-        # V @ diag(S / (S^2 + lambda)) @ U.T @ Y, implemented without
-        # materializing either a diagonal matrix or its inverse.
-        projected_y = u.transpose(0, 1) @ y
-        ridge_gain = singular_values / (
-            singular_values.square() + effective_alpha
-        )
-        coefficients = vh.transpose(0, 1) @ (
-            ridge_gain.unsqueeze(1) * projected_y
-        )
-        weight_matrix = coefficients.transpose(0, 1).contiguous()
-
         smallest_squared = singular_values[-1].square()
         regularized_condition = (
-            (largest_squared + effective_alpha)
-            / (smallest_squared + effective_alpha)
+            (largest_squared + alpha)
+            / (smallest_squared + alpha)
         )
         if self.verbose:
             print(
                 "OLSPCD ridge diagnostics: "
                 f"samples={x.shape[0]}, features={x.shape[1]}, "
                 f"outputs={y.shape[1]}, "
-                f"effective_alpha={effective_alpha.item():.6e}, "
+                f"alpha={alpha.item():.6e}, "
                 f"regularized_condition={regularized_condition.item():.6e}, "
                 f"max_abs_weight={weight_matrix.abs().max().item():.6e}"
             )
@@ -311,10 +379,28 @@ class Model(nn.Module):
             if self.use_fused_head
             else self.linear.weight
         )
-        return weight_matrix.to(
+        saved_weight = weight_matrix.to(
             device=target_weight.device,
             dtype=target_weight.dtype,
         )
+        metadata = {
+            "solver": "torch.linalg.svd",
+            "solver_device": "cpu",
+            "solver_dtype": "torch.float64",
+            "alpha": float(alpha.item()),
+            "samples": int(x64.shape[0]),
+            "input_features": int(x64.shape[1]),
+            "output_features": int(y64.shape[1]),
+            "design_matrix_sha256": design_sha256,
+            "target_matrix_sha256": target_sha256,
+            "largest_singular_value": float(singular_values[0].item()),
+            "smallest_singular_value": float(singular_values[-1].item()),
+            "regularized_condition": float(regularized_condition.item()),
+        }
+        return saved_weight, metadata
+
+    def get_fit_metadata(self):
+        return dict(self._fit_metadata)
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         """

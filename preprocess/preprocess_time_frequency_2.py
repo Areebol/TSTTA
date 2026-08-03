@@ -14,8 +14,8 @@ Resample_Full_Pipeline.py
         Trip_<TripId>_resampled_1s.csv
 
 脚本中已把输入/输出路径写死（按你的要求）：
-  INPUT_DIR = "/lichenghao/lzh/workspace/EnergyPrediction/data/eved-dataset/data/eVED"
-  OUTPUT_ROOT = "/lichenghao/lzh/workspace/EnergyPrediction/data/eved-dataset/data/segmented_1s_eVED_v3"
+  INPUT_DIR = "/linyuanping/dzs/data/Electric_vehicles_dataset/ECTTA_data/filtered_vehID_eVED"
+  OUTPUT_ROOT = "/linyuanping/dzs/data/Electric_vehicles_dataset/ECTTA_data/segmented_1s_eVED_v9"
 
 依赖：pandas, numpy
 
@@ -23,6 +23,7 @@ Resample_Full_Pipeline.py
 """
 import os
 import math
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import Counter
 from typing import List, Dict, Any
 
@@ -30,11 +31,25 @@ import numpy as np
 import pandas as pd
 from geopy.distance import geodesic
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 
 # ============== 配置（可按需修改列名列表） ==============
-INPUT_DIR = "/lichenghao/lzh/workspace/EnergyPrediction/data/eved-dataset/data/filtered_vehID_eVED"
-OUTPUT_ROOT = "/lichenghao/lzh/workspace/EnergyPrediction/data/eved-dataset/data/segmented_1s_eVED_v9"
+INPUT_DIR = "/linyuanping/dzs/data/Electric_vehicles_dataset/ECTTA_data/filtered_vehID_eVED"
+OUTPUT_ROOT = "/linyuanping/dzs/data/Electric_vehicles_dataset/ECTTA_data/segmented_1s_eVED_v9"
 TS_COL = "Timestamp(ms)"
+CATEGORIES = ["EV", "PHEV"]
+DEFAULT_NUM_WORKERS = min(8, max(1, os.cpu_count() or 1))
+SKIP_EXISTING = True
+VALIDATE_EXISTING = True
+PROGRESS_EVERY = 100
+FUEL_LHV_KWH_PER_L = 8.5
+FUEL_DENSITY_G_PER_L = 745.0
+AIR_DENSITY_G_PER_L = 1.225
+DEFAULT_AFR = 14.7
 
 # MATCH TYPE 候选列名（用于判断 match type == 2）
 MATCH_TYPE_CANDIDATES = ["Match Type", "MatchType", "Match_Type", "match_type", "Match_Type"]
@@ -260,7 +275,96 @@ def _gradient_agg_keep_single_nonzero(series: pd.Series):
     return float(s.mean())
 
 
-def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL) -> pd.DataFrame:
+def _first_existing_col(df: pd.DataFrame, candidates: List[str]):
+    return next((c for c in candidates if c in df.columns), None)
+
+
+def _numeric_series(df: pd.DataFrame, col: str, default=np.nan) -> pd.Series:
+    if col is None:
+        return pd.Series(default, index=df.index, dtype="float64")
+    return pd.to_numeric(df[col], errors="coerce")
+
+
+def _mean_numeric_cols(df: pd.DataFrame, candidates: List[str]) -> pd.Series:
+    cols = [c for c in candidates if c in df.columns]
+    if not cols:
+        return pd.Series(0.0, index=df.index, dtype="float64")
+    vals = [pd.to_numeric(df[c], errors="coerce") for c in cols]
+    return pd.concat(vals, axis=1).mean(axis=1).fillna(0.0)
+
+
+def _compute_fuel_energy_rate_kwh_per_h(df: pd.DataFrame) -> pd.Series:
+    """Estimate fuel chemical energy rate using FuelRate > MAF > load/displacement/RPM priority."""
+    fuel_rate_col = _first_existing_col(df, ["FuelRate", "Fuel Rate[L/hr]", "Fuel Rate", "fuel_rate_lph"])
+    maf_col = _first_existing_col(df, ["MAF", "MAF[g/sec]", "MAF[g/s]", "maf_gps"])
+    abs_load_col = _first_existing_col(df, ["AbsLoad", "Absolute Load[%]", "Absolute Load", "abs_load"])
+    displacement_col = _first_existing_col(df, ["Displacement_eng", "Engine Displacement[L]", "Displacement[L]"])
+    rpm_col = _first_existing_col(df, ["RPM_eng", "Engine RPM[RPM]", "Engine RPM", "RPM"])
+    afr_col = _first_existing_col(df, ["AFR", "Air Fuel Ratio", "air_fuel_ratio"])
+
+    stft = _mean_numeric_cols(df, [
+        "STFT",
+        "Short Term Fuel Trim Bank 1[%]",
+        "Short Term Fuel Trim Bank 2[%]",
+    ])
+    ltft = _mean_numeric_cols(df, [
+        "LTFT",
+        "Long Term Fuel Trim Bank 1[%]",
+        "Long Term Fuel Trim Bank 2[%]",
+    ])
+    fuel_trim_factor = (1.0 + stft / 100.0 + ltft / 100.0).clip(lower=0.0)
+
+    afr = _numeric_series(df, afr_col, default=DEFAULT_AFR)
+    afr = afr.where(afr > 0, DEFAULT_AFR).fillna(DEFAULT_AFR)
+
+    estimated_lph = pd.Series(np.nan, index=df.index, dtype="float64")
+
+    fuel_rate = _numeric_series(df, fuel_rate_col)
+    valid_fuel_rate = fuel_rate.notna() & (fuel_rate >= 0)
+    estimated_lph.loc[valid_fuel_rate] = fuel_rate.loc[valid_fuel_rate]
+
+    maf = _numeric_series(df, maf_col)
+    valid_maf = estimated_lph.isna() & maf.notna() & (maf >= 0)
+    estimated_lph.loc[valid_maf] = (
+        maf.loc[valid_maf]
+        * fuel_trim_factor.loc[valid_maf]
+        / afr.loc[valid_maf]
+        * 3600.0
+        / FUEL_DENSITY_G_PER_L
+    )
+
+    abs_load = _numeric_series(df, abs_load_col)
+    displacement = _numeric_series(df, displacement_col)
+    rpm = _numeric_series(df, rpm_col)
+    valid_load = (
+        estimated_lph.isna()
+        & abs_load.notna()
+        & displacement.notna()
+        & rpm.notna()
+        & (abs_load >= 0)
+        & (displacement > 0)
+        & (rpm >= 0)
+    )
+    estimated_maf = (
+        abs_load.loc[valid_load]
+        / 100.0
+        * displacement.loc[valid_load]
+        * rpm.loc[valid_load]
+        / 120.0
+        * AIR_DENSITY_G_PER_L
+    )
+    estimated_lph.loc[valid_load] = (
+        estimated_maf
+        * fuel_trim_factor.loc[valid_load]
+        / afr.loc[valid_load]
+        * 3600.0
+        / FUEL_DENSITY_G_PER_L
+    )
+
+    return estimated_lph.fillna(0.0) * FUEL_LHV_KWH_PER_L
+
+
+def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL, vehicle_type: str = None) -> pd.DataFrame:
     """
     对单个 trip 做 1000ms 的重采样并按规则聚合，返回聚合后的 DataFrame。
 
@@ -280,6 +384,15 @@ def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL) -> pd
     df = df.sort_values(by=timestamp_col)
     t0 = int(df[timestamp_col].min())
     df["window_index"] = ((df[timestamp_col] - t0) // 1000).astype(int)
+
+    is_phev = str(vehicle_type or "").upper() == "PHEV"
+    if is_phev:
+        if "Energy_Consumption" in df.columns:
+            df["Battery_Energy_Consumption"] = pd.to_numeric(df["Energy_Consumption"], errors="coerce")
+        else:
+            df["Battery_Energy_Consumption"] = 0.0
+        df["fuel_energy_rate_kwh_per_h"] = _compute_fuel_energy_rate_kwh_per_h(df)
+        df["Fuel_Energy_Consumption"] = df["fuel_energy_rate_kwh_per_h"] / 3600.0
 
     # --- 修正梯度：使用平滑海拔与匹配经纬度计算 Gradient Smoothed，避免 Raw 高度引起的跳变 ---
     def _recompute_gradient_from_smoothed(df_src: pd.DataFrame) -> pd.DataFrame:
@@ -585,6 +698,8 @@ def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL) -> pd
                 grouped.at[idx, 'HV Battery Power[W]'] = p_map[win]
             if 'Energy_Consumption' in grouped.columns and win in e_map:
                 grouped.at[idx, 'Energy_Consumption'] = e_map[win]
+            if is_phev and 'Battery_Energy_Consumption' in grouped.columns and win in e_map:
+                grouped.at[idx, 'Battery_Energy_Consumption'] = e_map[win]
     except Exception:
         pass
 
@@ -771,6 +886,23 @@ def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL) -> pd
                     grouped[c] = grouped[c].ffill().bfill()
 
             grouped = grouped.reset_index(drop=False)
+
+    # --- PHEV：燃油能耗 + 电池能耗，Energy_Consumption 保持为总能耗列 ---
+    if is_phev:
+        try:
+            if "Battery_Energy_Consumption" not in grouped.columns:
+                grouped["Battery_Energy_Consumption"] = pd.to_numeric(grouped.get("Energy_Consumption", 0.0), errors="coerce").fillna(0.0)
+            if "fuel_energy_rate_kwh_per_h" not in grouped.columns:
+                grouped["fuel_energy_rate_kwh_per_h"] = 0.0
+            grouped["Fuel_Energy_Consumption"] = (
+                pd.to_numeric(grouped["fuel_energy_rate_kwh_per_h"], errors="coerce").fillna(0.0) / 3600.0
+            )
+            grouped["Energy_Consumption"] = (
+                pd.to_numeric(grouped["Battery_Energy_Consumption"], errors="coerce").fillna(0.0)
+                + pd.to_numeric(grouped["Fuel_Energy_Consumption"], errors="coerce").fillna(0.0)
+            )
+        except Exception:
+            pass
 
     # --- 新增列：Acceleration（基于每秒速度差，单位 km/h/s） ---
     try:
@@ -1136,6 +1268,9 @@ def process_trip_group(df_trip: pd.DataFrame, timestamp_col: str = TS_COL) -> pd
             "HV Battery Power[W]",
             "HV Battery SOC[%]",
             "Energy_Consumption",
+            "Battery_Energy_Consumption",
+            "Fuel_Energy_Consumption",
+            "fuel_energy_rate_kwh_per_h",
         ]
         exist_block = [c for c in block if c in present]
         if exist_block:
@@ -1228,135 +1363,225 @@ def ensure_int_str(x):
         return str(x)
 
 
-def run_pipeline(input_dir: str = INPUT_DIR, output_root: str = OUTPUT_ROOT, timestamp_col: str = TS_COL):
-    """主流程：参考 Filter_VehId.py 的划分方式，按 category 列表和 veh_id 列表逐辆车聚合并处理。
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except Exception:
+        return default
 
-    该实现不会一次性把所有 CSV 合并到内存，而是按 vehicle 聚合（跨文件合并同一 VehId 的 Trip 行）。
-    目录结构按 Filter_VehId.py 的分类：output_root/EV/Veh_<VehId>/Trip_<TripId>_resampled_1s.csv
-    """
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() not in {"0", "false", "no", "n"}
+
+
+def _progress_iter(iterable, total: int):
+    if tqdm is not None:
+        return tqdm(iterable, total=total, desc="Trips", unit="file")
+    return iterable
+
+
+def _update_progress(progress, counts: Dict[str, int], done: int, total: int):
+    if tqdm is not None and hasattr(progress, "set_postfix"):
+        progress.set_postfix(
+            wrote=counts.get("wrote", 0),
+            skipped=counts.get("skipped", 0),
+            failed=counts.get("failed", 0),
+        )
+    elif done == total or done % PROGRESS_EVERY == 0:
+        print(
+            f"Progress {done}/{total}: "
+            f"wrote={counts.get('wrote', 0)}, "
+            f"skipped={counts.get('skipped', 0)}, "
+            f"failed={counts.get('failed', 0)}"
+        )
+
+
+def _is_complete_output_file(path: str, category: str = None) -> bool:
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        sample = pd.read_csv(path, nrows=1, low_memory=False)
+    except Exception:
+        return False
+    if sample.empty:
+        return False
+    required_cols = {"SecTime_ms"}
+    if str(category or "").upper() == "PHEV":
+        required_cols.update({
+            "Energy_Consumption",
+            "Battery_Energy_Consumption",
+            "Fuel_Energy_Consumption",
+            "fuel_energy_rate_kwh_per_h",
+        })
+    return required_cols.issubset(set(sample.columns))
+
+
+def _process_trip_file_task(args):
+    category, veh_id_str, trip_file, out_veh_folder, timestamp_col, skip_existing, validate_existing = args
+    trip_file_name = os.path.basename(trip_file)
+    candidate_trip_id = ensure_int_str(os.path.splitext(trip_file_name)[0])
+    candidate_out_file = os.path.join(out_veh_folder, f"{candidate_trip_id}.csv")
+
+    if skip_existing and os.path.exists(candidate_out_file):
+        if not validate_existing or _is_complete_output_file(candidate_out_file, category):
+            return "skipped", f"Skipped existing {candidate_out_file}"
+
+    try:
+        trip_df = pd.read_csv(trip_file, low_memory=False)
+    except Exception as e:
+        return "failed", f"Failed to read {trip_file}: {e}"
+
+    if trip_df.empty:
+        return "skipped", f"Empty file {trip_file}, skipping"
+
+    if 'Trip' in trip_df.columns:
+        trip_id_val = ensure_int_str(trip_df['Trip'].iat[0])
+    else:
+        trip_id_val = candidate_trip_id
+    out_file = os.path.join(out_veh_folder, f"{trip_id_val}.csv")
+
+    if skip_existing and os.path.exists(out_file):
+        if not validate_existing or _is_complete_output_file(out_file, category):
+            return "skipped", f"Skipped existing {out_file}"
+
+    # 找到 match type 列并识别 match==2 的行
+    match_col = next((c for c in MATCH_TYPE_CANDIDATES if c in trip_df.columns), None)
+    if match_col is not None:
+        try:
+            match_vals = pd.to_numeric(trip_df[match_col], errors='coerce')
+        except Exception:
+            match_vals = None
+    else:
+        match_vals = None
+
+    mask_interp = match_vals == 2 if match_vals is not None else pd.Series([False] * len(trip_df))
+
+    # 先将 Intersection / Bus Stops / Focus Points 的空白填充为 0（按需保留其他非空值）
+    FLAG_PRESERVE_LOWER = {"intersection", "bus stops", "bus_stop", "focus points", "focuspoints", "focus"}
+    for col in FILL_ZERO_COLS:
+        if col in trip_df.columns:
+            trip_df[col] = trip_df[col].replace("", np.nan)
+            lname = str(col).lower().strip().rstrip(';')
+            if lname in FLAG_PRESERVE_LOWER:
+                trip_df[col] = trip_df[col].where(trip_df[col].notna(), 0)
+            else:
+                trip_df[col] = trip_df[col].where(trip_df[col].notna(), np.nan)
+
+    # 对指定的三个限速相关列在 match==2 且原值为空的位置使用线性插值填补
+    for col in SPEED_FILL_COLS:
+        if col in trip_df.columns:
+            try:
+                s = pd.to_numeric(trip_df[col], errors='coerce')
+                if mask_interp.any() and s.isna().any():
+                    s_interp = s.interpolate(method='linear', limit_direction='both')
+                    fill_idx = mask_interp & s.isna()
+                    trip_df.loc[fill_idx, col] = s_interp[fill_idx]
+            except Exception as e:
+                print(f"    Warning: failed to interpolate {col} in {trip_file}: {e}")
+
+    # 将限速相关列在插值后四舍五入为整数，确保后续聚合不会产生小数
+    for col in SPEED_FILL_COLS:
+        if col in trip_df.columns:
+            try:
+                trip_df[col] = pd.to_numeric(trip_df[col], errors='coerce').round().astype('Int64')
+            except Exception:
+                continue
+
+    try:
+        out_df = process_trip_group(trip_df, timestamp_col=timestamp_col, vehicle_type=category)
+    except Exception as e:
+        return "failed", f"Error processing trip file {trip_file}: {e}"
+
+    if out_df.empty:
+        return "skipped", f"Trip produced no output, skipping: {trip_file}"
+
+    try:
+        os.makedirs(out_veh_folder, exist_ok=True)
+        out_df.to_csv(out_file, index=False)
+        return "wrote", f"Wrote {out_file}, rows={len(out_df)}"
+    except Exception as e:
+        return "failed", f"Failed to write {out_file}: {e}"
+
+
+def run_pipeline(
+    input_dir: str = INPUT_DIR,
+    output_root: str = OUTPUT_ROOT,
+    timestamp_col: str = TS_COL,
+    categories: List[str] = None,
+    num_workers: int = None,
+    skip_existing: bool = None,
+    validate_existing: bool = None,
+):
+    """主流程：按 category -> veh_id -> trip CSV 处理，可并行处理 trip 文件。"""
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
     os.makedirs(output_root, exist_ok=True)
 
-    # 输入数据已经按 Filter_VehId.py 的方式分好了目录：input_dir/{category}/{veh_id}/*.csv
-    # 直接遍历 category (EV/PHEV) 下每个 VehId 目录，并对目录下的每个 trip CSV 进行处理
-    categories = ["EV"]
+    categories = categories or CATEGORIES
+    num_workers = _env_int("PREPROCESS_NUM_WORKERS", num_workers or DEFAULT_NUM_WORKERS)
+    skip_existing = _env_bool("PREPROCESS_SKIP_EXISTING", SKIP_EXISTING if skip_existing is None else skip_existing)
+    validate_existing = _env_bool("PREPROCESS_VALIDATE_EXISTING", VALIDATE_EXISTING if validate_existing is None else validate_existing)
+
+    tasks = []
     for category in categories:
         cat_dir = os.path.join(input_dir, category)
         if not os.path.isdir(cat_dir):
             print(f"Category folder not found, skipping: {cat_dir}")
             continue
-        print(f"Processing category folder: {cat_dir}")
+        print(f"Scanning category folder: {cat_dir}")
 
         for veh_folder_name in sorted(os.listdir(cat_dir)):
             veh_folder_path = os.path.join(cat_dir, veh_folder_name)
             if not os.path.isdir(veh_folder_path):
                 continue
 
-            # veh_folder_name 期望为车辆 id（Filter_VehId.py 使用数字文件夹名），规范为字符串
             veh_id_str = ensure_int_str(veh_folder_name)
-            # 输出目录改为 output_root/{category}/{VehId}/
             out_veh_folder = os.path.join(output_root, category, f"{veh_id_str}")
             os.makedirs(out_veh_folder, exist_ok=True)
 
-            # 遍历该车辆目录下的 trip CSV 文件
-            trip_files = sorted([f for f in os.listdir(veh_folder_path) if f.lower().endswith('.csv')])
+            trip_files = sorted(f for f in os.listdir(veh_folder_path) if f.lower().endswith('.csv'))
             for trip_file_name in trip_files:
                 trip_file = os.path.join(veh_folder_path, trip_file_name)
-                print(f"  Processing trip file: {trip_file}")
+                tasks.append((category, veh_id_str, trip_file, out_veh_folder, timestamp_col, skip_existing, validate_existing))
+
+    if not tasks:
+        print("No trip files found.")
+        print("Pipeline complete.")
+        return
+
+    print(f"Processing {len(tasks)} trip files with {num_workers} worker(s), skip_existing={skip_existing}, validate_existing={validate_existing}")
+
+    counts = {"wrote": 0, "skipped": 0, "failed": 0}
+    done = 0
+    if num_workers == 1:
+        progress = _progress_iter(tasks, total=len(tasks))
+        for task in progress:
+            status, msg = _process_trip_file_task(task)
+            counts[status] = counts.get(status, 0) + 1
+            done += 1
+            if status == "failed":
+                print(f"  {msg}")
+            _update_progress(progress, counts, done, len(tasks))
+    else:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(_process_trip_file_task, task) for task in tasks]
+            progress = _progress_iter(as_completed(futures), total=len(futures))
+            for future in progress:
                 try:
-                    trip_df = pd.read_csv(trip_file, low_memory=False)
+                    status, msg = future.result()
                 except Exception as e:
-                    print(f"    Failed to read {trip_file}: {e}")
-                    continue
+                    status, msg = "failed", f"Worker crashed: {e}"
+                counts[status] = counts.get(status, 0) + 1
+                done += 1
+                if status == "failed":
+                    print(f"  {msg}")
+                _update_progress(progress, counts, done, len(futures))
 
-                if trip_df.empty:
-                    print(f"    Empty file {trip_file}, skipping")
-                    continue
-
-                # 找到 match type 列并识别 match==2 的行
-                match_col = next((c for c in MATCH_TYPE_CANDIDATES if c in trip_df.columns), None)
-                if match_col is not None:
-                    try:
-                        match_vals = pd.to_numeric(trip_df[match_col], errors='coerce')
-                    except Exception:
-                        match_vals = None
-                else:
-                    match_vals = None
-
-                mask_interp = match_vals == 2 if match_vals is not None else pd.Series([False] * len(trip_df))
-
-                # 先将 Intersection / Bus Stops / Focus Points 的空白填充为 0（按需保留其他非空值）
-                # 新规则：把这三类列视为 flag 信号，NaN 填补为 0；在聚合时只要出现非0情况就保留（否则为0）。
-                # 支持列名变体（不区分大小写，允许末尾分号等）。
-                FLAG_PRESERVE_LOWER = {"intersection", "bus stops", "bus_stop", "focus points", "focuspoints", "focus"}
-                for col in FILL_ZERO_COLS:
-                    if col in trip_df.columns:
-                        # 把空字符串视为缺失
-                        trip_df[col] = trip_df[col].replace("", np.nan)
-                        lname = str(col).lower().strip().rstrip(';')
-                        if lname in FLAG_PRESERVE_LOWER:
-                            # 对这些列，直接把 NaN 填为 0（保留原有非0/文本值）
-                            trip_df[col] = trip_df[col].where(trip_df[col].notna(), 0)
-                        else:
-                            # 其它候选项（非我们判定的三类）保持原样（保留 NaN，不填 0）
-                            trip_df[col] = trip_df[col].where(trip_df[col].notna(), np.nan)
-
-                # 对指定的三个限速相关列在 match==2 且原值为空的位置使用线性插值填补
-                for col in SPEED_FILL_COLS:
-                    if col in trip_df.columns:
-                        try:
-                            s = pd.to_numeric(trip_df[col], errors='coerce')
-                            if mask_interp.any() and s.isna().any():
-                                s_interp = s.interpolate(method='linear', limit_direction='both')
-                                fill_idx = mask_interp & s.isna()
-                                trip_df.loc[fill_idx, col] = s_interp[fill_idx]
-                        except Exception as e:
-                            print(f"    Warning: failed to interpolate {col} in {trip_file}: {e}")
-
-                # 将限速相关列在插值后四舍五入为整数，确保后续聚合不会产生小数
-                for col in SPEED_FILL_COLS:
-                    if col in trip_df.columns:
-                        try:
-                            # 原先的写法会触发 pandas 的 DeprecationWarning（对列子集赋值）
-                            # trip_df[col] = pd.to_numeric(trip_df[col], errors='coerce')
-                            # mask = trip_df[col].notna()
-                            # trip_df.loc[mask, col] = trip_df.loc[mask, col].round().astype('Int64')
-
-                            # 统一对整列进行转换与四舍五入，并一次性赋值，避免警告
-                            trip_df[col] = pd.to_numeric(trip_df[col], errors='coerce').round().astype('Int64')
-                        except Exception:
-                            # 忽略转换问题，保持原状
-                            continue
-
-                # 重采样处理
-                try:
-                    out_df = process_trip_group(trip_df, timestamp_col=timestamp_col)
-                except Exception as e:
-                    print(f"    Error processing trip file {trip_file}: {e}")
-                    continue
-
-                if out_df.empty:
-                    print(f"    Trip produced no output, skipping")
-                    continue
-
-                # 输出文件名：使用 Trip 列（若存在）否则用原文件名（去扩展名）
-                if 'Trip' in trip_df.columns:
-                    trip_id_val = ensure_int_str(trip_df['Trip'].iat[0])
-                else:
-                    trip_id_val = ensure_int_str(os.path.splitext(trip_file_name)[0])
-
-                # 输出文件名为 {TripId}.csv
-                out_file = os.path.join(out_veh_folder, f"{trip_id_val}.csv")
-                try:
-                    out_df.to_csv(out_file, index=False)
-                    print(f"    Wrote {out_file}, rows={len(out_df)}")
-                except Exception as e:
-                    print(f"    Failed to write {out_file}: {e}")
-
-    print("Pipeline complete.")
-
+    print(f"Pipeline complete. wrote={counts.get('wrote', 0)}, skipped={counts.get('skipped', 0)}, failed={counts.get('failed', 0)}")
 
 if __name__ == "__main__":
     run_pipeline()

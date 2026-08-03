@@ -56,6 +56,25 @@ def construct_loader(cfg, split, batch_size=None):
 def get_train_dataloader(cfg):
     return construct_loader(cfg, "train")
 
+def get_olspcd_train_dataloader(cfg):
+    """Return the canonical complete design set for OLSPCD fitting.
+
+    OLSPCD is solved in one closed-form pass. Shuffling is unnecessary and
+    drop_last would change the regression problem by discarding observations.
+    A single worker also makes the sample order independent of worker
+    scheduling and is deliberately local to OLSPCD rather than changing the
+    training behavior of gradient-based models.
+    """
+    dataset = build_dataset(cfg, "train")
+    return DataLoader(
+        dataset,
+        batch_size=cfg.TRAIN.BATCH_SIZE,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+        drop_last=False,
+    )
+
 
 def get_val_dataloader(cfg):
     return construct_loader(cfg, "val")

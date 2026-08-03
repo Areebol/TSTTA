@@ -288,6 +288,17 @@ _C.TTA.DUAL.DIVERSITY_MARGIN = 0.1
 _C.TTA.DUAL.BUDGET_GAMMA = 0.05
 _C.TTA.DUAL.LAMBDA_BUDGET = 1.0
 
+# TPA online prototype knowledge management. Source prototypes are protected;
+# online prototypes are admitted only when delayed-label replay MSE improves.
+_C.TTA.TPA = CN()
+_C.TTA.TPA.N_SOURCE = 16
+_C.TTA.TPA.N_ONLINE = 16
+_C.TTA.TPA.ANCHOR_CAPACITY = 64
+_C.TTA.TPA.DISTILL_MODE = "mean"  # "mean" or "query_weighted"
+_C.TTA.TPA.REPLAY_BATCH_SIZE = 128
+_C.TTA.TPA.COHERENCE_EPS = 1e-8
+_C.TTA.TPA.SAVE_STATE = True
+
 # PKA adapter hyperparameters
 _C.TTA.PKA = CN()
 _C.TTA.PKA.LR = 1e-3

@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 import models.optimizer as optim
 from models.build import load_best_model
 from models.forecast import forecast
-from datasets.loader import get_train_dataloader, get_val_dataloader, get_test_dataloader
+from datasets.loader import get_train_dataloader,get_val_dataloader,get_test_dataloader,get_olspcd_train_dataloader
 from utils.misc import mkdir
 from utils.meters import AverageMeter, ProgressMeter
 from config import get_norm_method, get_norm_module_cfg
@@ -48,7 +48,10 @@ class Trainer:
         self.cur_iter = 0
 
         # Create the train and val (test) loaders.
-        self.train_loader = get_train_dataloader(self.cfg)
+        if self.cfg.MODEL.NAME == 'OLSPCD':
+            self.train_loader = get_olspcd_train_dataloader(self.cfg)
+        else:
+            self.train_loader = get_train_dataloader(self.cfg)
         self.val_loader = get_val_dataloader(self.cfg)
         self.test_loader = get_test_dataloader(self.cfg)
 
@@ -482,11 +485,22 @@ class Trainer:
         return (cur_iter + 1) % self.cfg.TRAIN.PRINT_FREQ == 0 or (cur_iter + 1) == len(self.val_loader)
 
     def save_best_model(self):
+        model_state = self.model.state_dict()
+        if self.cfg.MODEL.NAME == 'OLSPCD':
+            # CPU tensors make the closed-form checkpoint portable across
+            # CUDA/NPU/CPU runtimes without changing parameter names.
+            model_state = {
+                name: value.detach().cpu()
+                for name, value in model_state.items()
+            }
+
         checkpoint = {
             "epoch": self.cur_epoch,
-            "model_state": self.model.state_dict(),
+            "model_state": model_state,
             "cfg": self.cfg.dump(),
         }
+        if hasattr(self.model, 'get_fit_metadata'):
+            checkpoint["fit_metadata"] = self.model.get_fit_metadata()
 
         if self.cfg.TRAIN.FINETUNE:
             with open(mkdir(self.cfg.TRAIN.FINETUNE_DIR) / '{}_best.pth'.format(self.cfg.DATA.TYPE), "wb") as f:

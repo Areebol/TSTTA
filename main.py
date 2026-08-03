@@ -20,6 +20,7 @@ import tta.pka_online as pka_online
 import tta.tta_coba_online as tta_coba_online
 import tta.coba as coba
 import tta.coba_vis as coba_vis
+import tta.tpa as tpa
 from tta.tta_output import build_tta_runner
 from config import get_norm_module_cfg
 
@@ -80,6 +81,8 @@ def main():
             adapter = coba.build_adapter(cfg, model)
         elif cfg.TTA.METHOD == "COBA_Vis":
             adapter = coba_vis.build_adapter(cfg, model)
+        elif cfg.TTA.METHOD == "TPA":
+            adapter = tpa.build_adapter(cfg, model, norm_module=norm_module)
         else:
             print(f"Unknown TTA method: {cfg.TTA.METHOD}")
         
