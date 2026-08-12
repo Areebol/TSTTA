@@ -1,6 +1,7 @@
 # adapted from https://github.com/DequanWang/tent/blob/master/tent.py
 
 from typing import List
+import os
 from copy import deepcopy
 
 import torch
@@ -13,7 +14,8 @@ from models.forecast import forecast
 from datasets.loader import get_test_dataloader, get_domain_shift_dataloader
 from utils.misc import prepare_inputs
 from config import get_norm_method
-from tta.utils import save_tta_results
+from tta.utils import save_summary_to_csv, save_tta_results
+from tta.zo_utils import OnlineMemoryProfiler
 from device_manager import global_device
 from tta.loss import stable_complex_abs
 
@@ -45,11 +47,15 @@ class Adapter(nn.Module):
         
         self.optimizer = get_optimizer(self.named_params_to_adapt.values(), cfg.TTA)
         
-        self.model_state, self.optimizer_state = self._copy_model_and_optimizer()
-        if self.cfg.TTA.TAFAS.CALI_MODULE:
-            self.cali_state = self._copy_cali()
-        else:
-            self.cali_state = None
+        self.model_state = None
+        self.optimizer_state = None
+        self.cali_state = None
+        if self.cfg.TTA.RESET:
+            self.model_state, self.optimizer_state = (
+                self._copy_model_and_optimizer()
+            )
+            if self.cfg.TTA.TAFAS.CALI_MODULE:
+                self.cali_state = self._copy_cali()
         
         if hasattr(self.test_loader.dataset, "get_test_num_windows"):
             test_num_windows = self.test_loader.dataset.get_test_num_windows()
@@ -69,6 +75,9 @@ class Adapter(nn.Module):
 
         self.mse_all = []
         self.mae_all = []
+        self.memory_profiler = OnlineMemoryProfiler(
+            enabled=cfg.TTA.ZO.PROFILE_MEMORY
+        )
         self.mse_per_var_all = []
 
         ds = self.test_loader.dataset
@@ -97,6 +106,10 @@ class Adapter(nn.Module):
             self.cali.load_state_dict(deepcopy(self.cali_state), strict=True)
 
     def _load_model_and_optimizer(self):
+        if self.model_state is None or self.optimizer_state is None:
+            raise RuntimeError(
+                "TAFAS reset requested without an initial-state snapshot."
+            )
         self.model.load_state_dict(deepcopy(self.model_state), strict=True)
         self.optimizer.load_state_dict(deepcopy(self.optimizer_state))
         if self.cfg.TTA.TAFAS.CALI_MODULE:
@@ -177,7 +190,6 @@ class Adapter(nn.Module):
             enc_window_all, enc_window_stamp_all, dec_window_all, dec_window_stamp_all = prepare_inputs(inputs)
             # print(f'enc_window_all shape: {enc_window_all.shape}, enc_window_stamp_all shape: {enc_window_stamp_all.shape}, dec_window_all shape: {dec_window_all.shape}, dec_window_stamp_all shape: {dec_window_stamp_all.shape}')
 
-            breakpoint()
             batch_start = 0
             batch_end = 0
             batch_idx = 0
@@ -257,6 +269,38 @@ class Adapter(nn.Module):
             pred_len=self.cfg.DATA.PRED_LEN,
             mse_after_tta=self.mse_all.mean(),
             mae_after_tta=self.mae_all.mean(),
+            save_dir=self.cfg.RESULT_DIR,
+        )
+        memory_record = {
+            "method": "tafas",
+            "tta_method": tta_method,
+            "model": self.cfg.MODEL.NAME,
+            "dataset_name": dataset_name,
+            "pred_len": self.cfg.DATA.PRED_LEN,
+            "seed": self.cfg.SEED,
+            "steps_per_batch": self.cfg.TTA.TAFAS.STEPS,
+            **self.memory_profiler.summary(),
+        }
+        save_summary_to_csv(
+            memory_record,
+            csv_path=os.path.join(
+                self.cfg.RESULT_DIR, "online_memory_results.csv"
+            ),
+            key_fields=[
+                "method",
+                "tta_method",
+                "model",
+                "dataset_name",
+                "pred_len",
+                "seed",
+            ],
+        )
+        print(
+            "TAFAS memory: "
+            f"{memory_record['peak_allocated_mb']:.2f} MiB peak, "
+            f"{memory_record['peak_saved_tensors_mb']:.2f} MiB saved tensors, "
+            f"{memory_record['non_forward_online_overhead_mb']:.2f} MiB "
+            "non-forward online overhead"
         )
         self.model.eval()
     
@@ -393,50 +437,96 @@ class Adapter(nn.Module):
         batch_size = period + 1
         return period, batch_size
 
+    def _online_optimizer_step(self, loss_closure, active_inputs):
+        self.memory_profiler.measure_matched_no_grad(loss_closure)
+        adaptation_module = (
+            self.cali if self.cfg.TTA.TAFAS.CALI_MODULE else self.model
+        )
+        self.memory_profiler.measure_online_state(
+            adapter=adaptation_module,
+            optimizer=self.optimizer,
+            history=self.inputs_dict,
+            active_inputs=active_inputs,
+        )
+        self.memory_profiler.begin_step()
+        try:
+            optimizer_params = list(self.named_params_to_adapt.values())
+            with self.memory_profiler.track_saved_tensors(optimizer_params):
+                self.optimizer.zero_grad(set_to_none=True)
+                loss = loss_closure()
+                loss.backward()
+                self.optimizer.step()
+                return loss.detach()
+        finally:
+            self.memory_profiler.end_step()
+
     def _adapt_with_full_ground_truth_if_available(self):
         while self.cur_step >= self.pred_step_end_dict[min(self.pred_step_end_dict.keys())]:
             batch_idx_available = min(self.pred_step_end_dict.keys())
             inputs_history = self.inputs_dict.pop(batch_idx_available)
             for _ in range(self.cfg.TTA.TAFAS.STEPS):
                 self.n_adapt += 1
-                
                 self.switch_model_to_train()
 
-                if self.cfg.TTA.TAFAS.CALI_MODULE and self.cfg.MODEL.NAME != 'PatchTST':
-                    inputs_history = self.cali.input_calibration(inputs_history)
-                pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
-                
-                if self.cfg.TTA.TAFAS.CALI_MODULE:
-                    pred = self.cali.output_calibration(pred)
-                    
-                loss = F.mse_loss(pred, ground_truth)
-                
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                
+                def loss_closure():
+                    current_inputs = inputs_history
+                    if (
+                        self.cfg.TTA.TAFAS.CALI_MODULE
+                        and self.cfg.MODEL.NAME != "PatchTST"
+                    ):
+                        current_inputs = self.cali.input_calibration(current_inputs)
+                    pred, ground_truth = forecast(
+                        self.cfg,
+                        current_inputs,
+                        self.model,
+                        self.norm_module,
+                    )
+                    if self.cfg.TTA.TAFAS.CALI_MODULE:
+                        pred = self.cali.output_calibration(pred)
+                    return F.mse_loss(pred, ground_truth)
+
+                self._online_optimizer_step(loss_closure, inputs_history)
                 self.switch_model_to_eval()
-            
+
             self.pred_step_end_dict.pop(batch_idx_available)
 
-    def _adapt_with_partial_ground_truth(self, inputs, period, batch_size, batch_idx):
+    def _adapt_with_partial_ground_truth(
+        self, inputs, period, batch_size, batch_idx
+    ):
+        pred = None
+        ground_truth = None
         for _ in range(self.cfg.TTA.TAFAS.STEPS):
             self.n_adapt += 1
-            
-            if self.cfg.TTA.TAFAS.CALI_MODULE and self.cfg.MODEL.NAME != 'PatchTST':
-                inputs = self.cali.input_calibration(inputs)
-            pred, ground_truth = forecast(self.cfg, inputs, self.model, self.norm_module)
-            
-            if self.cfg.TTA.TAFAS.CALI_MODULE:
-                pred = self.cali.output_calibration(pred)
-                
-            pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
-            mse_partial = F.mse_loss(pred_partial, ground_truth_partial)
-                
-            self.optimizer.zero_grad()
-            mse_partial.backward()
-            self.optimizer.step()
+            actual_forward = {}
+
+            def loss_closure():
+                current_inputs = inputs
+                if (
+                    self.cfg.TTA.TAFAS.CALI_MODULE
+                    and self.cfg.MODEL.NAME != "PatchTST"
+                ):
+                    current_inputs = self.cali.input_calibration(current_inputs)
+                candidate, target = forecast(
+                    self.cfg,
+                    current_inputs,
+                    self.model,
+                    self.norm_module,
+                )
+                if self.cfg.TTA.TAFAS.CALI_MODULE:
+                    candidate = self.cali.output_calibration(candidate)
+                if torch.is_grad_enabled():
+                    actual_forward["pred"] = candidate
+                    actual_forward["ground_truth"] = target
+                return F.mse_loss(
+                    candidate[0][:period], target[0][:period]
+                )
+
+            self._online_optimizer_step(loss_closure, inputs)
+            pred = actual_forward["pred"].detach()
+            ground_truth = actual_forward["ground_truth"].detach()
+
         return pred, ground_truth
+
 
     @torch.no_grad()
     def _adjust_prediction(self, pred, inputs, batch_size, period):

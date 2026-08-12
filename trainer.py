@@ -48,10 +48,7 @@ class Trainer:
         self.cur_iter = 0
 
         # Create the train and val (test) loaders.
-        if self.cfg.MODEL.NAME == 'OLSPCD':
-            self.train_loader = get_olspcd_train_dataloader(self.cfg)
-        else:
-            self.train_loader = get_train_dataloader(self.cfg)
+        self.train_loader = get_train_dataloader(self.cfg)
         self.val_loader = get_val_dataloader(self.cfg)
         self.test_loader = get_test_dataloader(self.cfg)
 
@@ -67,7 +64,7 @@ class Trainer:
             self.optimizer_stat = optim.construct_optimizer(self.norm_module, self.cfg.SAN)
 
     def train(self):
-        if self.cfg.MODEL.NAME in ['OLS', 'OLSPCD']:
+        if self.cfg.MODEL.NAME == 'OLS':
             self.model.fit_ols_solutions(self.train_loader)
             self.save_best_model()
             return

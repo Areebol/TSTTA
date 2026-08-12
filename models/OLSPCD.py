@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import hashlib
+import os
 from sklearn.linear_model import Ridge
 from torch.utils.data import RandomSampler
 
@@ -67,6 +68,16 @@ class Model(nn.Module):
         self.outputs_targets = self.use_fused_head and not self.individual
         self.output_vars = cfg.c_out if self.outputs_targets else self.n_vars
         self.target_start_idx = getattr(cfg, "target_start_idx", 0)
+        # Keep solver experiments local to OLSPCD instead of extending the
+        # global YACS config. The default remains deterministic ridge; TSVD is
+        # enabled explicitly through environment variables.
+        self.ols_solver = os.environ.get(
+            "OLSPCD_SOLVER",
+            "ridge",
+        ).lower()
+        self.svd_rcond = float(
+            os.environ.get("OLSPCD_SVD_RCOND", "0.0")
+        )
         self._fit_metadata = {}
 
         # Disable 'fit_intercept' in Ridge regresion when instance normalization is used.
@@ -287,7 +298,7 @@ class Model(nn.Module):
 
     @torch.no_grad()
     def _solve_fused_ridge(self, x, y):
-        """Solve fixed-alpha ridge regression on canonical CPU float64 data.
+        """Solve deterministic ridge or truncated-SVD regression.
 
         x: [num_windows, input_vars * seq_len]
         y: [num_windows, output_vars * pred_len]
@@ -295,8 +306,9 @@ class Model(nn.Module):
         The previous implementation ran float32 SVD on the active accelerator
         and explicitly inverted diag(S**2 + alpha). Both choices make the
         highly collinear eVED solution device-dependent. This implementation
-        keeps the configured alpha unchanged, computes on CPU float64, and
-        applies the stable S / (S**2 + alpha) ridge gain directly.
+        Both modes compute on CPU float64. Ridge applies the stable
+        S / (S**2 + alpha) gain. TSVD removes singular directions below
+        svd_rcond * largest_singular_value and uses 1 / S for retained modes.
         """
         if x.ndim != 2 or y.ndim != 2:
             raise ValueError(
@@ -318,10 +330,20 @@ class Model(nn.Module):
         design_sha256 = hashlib.sha256(x_bytes).hexdigest()
         target_sha256 = hashlib.sha256(y_bytes).hexdigest()
 
+        if self.ols_solver not in {"ridge", "tsvd"}:
+            raise ValueError(
+                f"Unsupported OLSPCD solver: {self.ols_solver}. "
+                "Expected 'ridge' or 'tsvd'."
+            )
         alpha_value = float(self.alpha)
         if not np.isfinite(alpha_value) or alpha_value <= 0:
             raise ValueError(
                 f"OLSPCD alpha must be finite and positive: {self.alpha}"
+            )
+        if not np.isfinite(self.svd_rcond) or not 0 <= self.svd_rcond < 1:
+            raise ValueError(
+                "OLSPCD svd_rcond must be finite and in [0, 1): "
+                f"{self.svd_rcond}"
             )
 
         # Keep the LAPACK reduction order fixed within one software stack.
@@ -346,13 +368,29 @@ class Model(nn.Module):
             )
             projected_y = u.transpose(0, 1) @ y64
 
-            # V @ diag(S / (S^2 + alpha)) @ U.T @ Y, implemented
-            # without materializing a diagonal matrix or its inverse.
-            ridge_gain = singular_values / (
-                singular_values.square() + alpha
-            )
+            cutoff = singular_values[0] * self.svd_rcond
+            if self.ols_solver == "ridge":
+                spectral_gain = singular_values / (
+                    singular_values.square() + alpha
+                )
+                retained_mask = torch.ones_like(
+                    singular_values,
+                    dtype=torch.bool,
+                )
+            else:
+                retained_mask = singular_values > cutoff
+                if not retained_mask.any():
+                    raise RuntimeError(
+                        "OLSPCD TSVD removed every singular direction: "
+                        f"rcond={self.svd_rcond}."
+                    )
+                spectral_gain = torch.zeros_like(singular_values)
+                spectral_gain[retained_mask] = torch.reciprocal(
+                    singular_values[retained_mask]
+                )
+
             coefficients = vh.transpose(0, 1) @ (
-                ridge_gain.unsqueeze(1) * projected_y
+                spectral_gain.unsqueeze(1) * projected_y
             )
             weight_matrix = coefficients.transpose(0, 1).contiguous()
         finally:
@@ -360,17 +398,25 @@ class Model(nn.Module):
 
         largest_squared = singular_values[0].square()
         smallest_squared = singular_values[-1].square()
-        regularized_condition = (
-            (largest_squared + alpha)
-            / (smallest_squared + alpha)
-        )
+        retained_rank = int(retained_mask.sum().item())
+        smallest_retained = singular_values[retained_mask][-1]
+        if self.ols_solver == "ridge":
+            effective_condition = (
+                (largest_squared + alpha)
+                / (smallest_squared + alpha)
+            )
+        else:
+            effective_condition = singular_values[0] / smallest_retained
         if self.verbose:
             print(
-                "OLSPCD ridge diagnostics: "
+                "OLSPCD spectral diagnostics: "
+                f"solver={self.ols_solver}, "
                 f"samples={x.shape[0]}, features={x.shape[1]}, "
                 f"outputs={y.shape[1]}, "
                 f"alpha={alpha.item():.6e}, "
-                f"regularized_condition={regularized_condition.item():.6e}, "
+                f"svd_rcond={self.svd_rcond:.6e}, "
+                f"retained_rank={retained_rank}/{singular_values.numel()}, "
+                f"effective_condition={effective_condition.item():.6e}, "
                 f"max_abs_weight={weight_matrix.abs().max().item():.6e}"
             )
 
@@ -384,10 +430,15 @@ class Model(nn.Module):
             dtype=target_weight.dtype,
         )
         metadata = {
-            "solver": "torch.linalg.svd",
+            "solver": self.ols_solver,
+            "linear_algebra": "torch.linalg.svd",
             "solver_device": "cpu",
             "solver_dtype": "torch.float64",
             "alpha": float(alpha.item()),
+            "svd_rcond": float(self.svd_rcond),
+            "singular_value_cutoff": float(cutoff.item()),
+            "retained_rank": retained_rank,
+            "total_rank": int(singular_values.numel()),
             "samples": int(x64.shape[0]),
             "input_features": int(x64.shape[1]),
             "output_features": int(y64.shape[1]),
@@ -395,7 +446,10 @@ class Model(nn.Module):
             "target_matrix_sha256": target_sha256,
             "largest_singular_value": float(singular_values[0].item()),
             "smallest_singular_value": float(singular_values[-1].item()),
-            "regularized_condition": float(regularized_condition.item()),
+            "smallest_retained_singular_value": float(
+                smallest_retained.item()
+            ),
+            "effective_condition": float(effective_condition.item()),
         }
         return saved_weight, metadata
 

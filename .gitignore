@@ -30,6 +30,7 @@ docs/
 !docs/
 docs/*
 !docs/TPA_online_knowledge_management.md
+!docs/zero_order_online_adaptation.md
 logs/
 *.json
 

@@ -24,11 +24,18 @@ read -r -a DIRECTIONS_ARRAY <<< "${DIRECTIONS_TEXT}"
 GPU_ID="${GPU_ID:-0}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 ALPHA="${ALPHA:-1e-6}"
+OLSPCD_SOLVER="${OLSPCD_SOLVER:-ridge}"
+OLSPCD_SVD_RCOND="${OLSPCD_SVD_RCOND:-0.0}"
 # YACS preserves scalar types strictly. MODEL.alpha is declared as float, so
 # normalize integer-looking environment values such as ALPHA=1 to ALPHA=1.0.
 if [[ "${ALPHA}" =~ ^[+-]?[0-9]+$ ]]; then
     ALPHA="${ALPHA}.0"
 fi
+if [[ "${OLSPCD_SVD_RCOND}" =~ ^[+-]?[0-9]+$ ]]; then
+    OLSPCD_SVD_RCOND="${OLSPCD_SVD_RCOND}.0"
+fi
+export OLSPCD_SOLVER
+export OLSPCD_SVD_RCOND
 
 export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 export PYTHONHASHSEED=0
@@ -66,7 +73,8 @@ for PRED_LEN in "${PRED_LENS_ARRAY[@]}"; do
 
         echo "================================================================"
         echo "[SOLVE] pred_len=${PRED_LEN}, ${TRAIN_ID}->${TEST_ID}"
-        echo "[SOLVE] alpha=${ALPHA}, batch_size=${BATCH_SIZE}"
+        echo "[SOLVE] solver=${OLSPCD_SOLVER}, alpha=${ALPHA}, svd_rcond=${OLSPCD_SVD_RCOND}"
+        echo "[SOLVE] batch_size=${BATCH_SIZE}"
         echo "[SOLVE] checkpoint=${CHECKPOINT_DIR}/checkpoint_best.pth"
 
         python main.py \
@@ -108,4 +116,3 @@ done
 
 echo "================================================================"
 echo "[PASS] OLSPCD closed-form fitting completed."
-

@@ -4,18 +4,18 @@ set -euo pipefail
 # Evaluate the retrained two-channel PCD checkpoints on RTX 3090.
 
 PROJECT_ROOT="${PROJECT_ROOT:-/linyuanping/dzs/codes/TSTTA}"
-CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${PROJECT_ROOT}/checkpoints/PCD}"
-RESULT_ROOT="${RESULT_ROOT:-${PROJECT_ROOT}/results/0801_pcd_compare/new_gpu}"
-LOG_ROOT="${LOG_ROOT:-${PROJECT_ROOT}/logs/0801_pcd_compare/new_gpu}"
+CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${PROJECT_ROOT}/checkpoints/pcd}"
+RESULT_ROOT="${RESULT_ROOT:-${PROJECT_ROOT}/results/pcd}"
+LOG_ROOT="${LOG_ROOT:-${PROJECT_ROOT}/logs/pcd}"
 DATA_BASE_DIR="${DATA_BASE_DIR:-${PROJECT_ROOT}/data}"
 GPU_ID="${GPU_ID:-0}"
 
 MODELS=(
-    # "FreTSPCD"
-    # "PatchTSTPCD"
-    # "DLinearPCD"
-    # "iTransformerPCD"
-    # "MICNPCD"
+    "FreTSPCD"
+    "PatchTSTPCD"
+    "DLinearPCD"
+    "iTransformerPCD"
+    "MICNPCD"
     "OLSPCD"
 )
 PRED_LENS=(24 48 96 192)

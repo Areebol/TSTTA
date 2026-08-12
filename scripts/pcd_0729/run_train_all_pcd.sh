@@ -15,7 +15,7 @@ MODELS=(
     "DLinearPCD"
     "iTransformerPCD"
     "MICNPCD"
-    # "OLSPCD"
+    "OLSPCD"
 )
 PRED_LENS=(24 48 96 192)
 
@@ -30,14 +30,14 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 LR="${LR:-1e-4}"
 GPU_ID="${GPU_ID:-0,1}"
 
-TRAIN_IDS="${TRAIN_IDS:-['10']}"
+TRAIN_IDS="${TRAIN_IDS:-['455']}"
 VAL_IDS="${VAL_IDS:-${TRAIN_IDS}}"
-TEST_IDS="${TEST_IDS:-['455']}"
+TEST_IDS="${TEST_IDS:-['10']}"
 
 TRAIN_IDS_CLEAN="$(echo "${TRAIN_IDS}" | tr -d "[]'\" ")"
 TEST_IDS_CLEAN="$(echo "${TEST_IDS}" | tr -d "[]'\" ")"
 
-RUN_TAG="${RUN_TAG:-0729_full_gpu_pcd}"
+RUN_TAG="${RUN_TAG:-pcd}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-./checkpoints/${RUN_TAG}}"
 RESULT_ROOT="${RESULT_ROOT:-./results/${RUN_TAG}}"
 LOG_ROOT="${LOG_ROOT:-./logs/${RUN_TAG}}"

@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
-from copy import deepcopy
 from typing import List, Optional
 from torch.utils.data import DataLoader, Subset
 
@@ -21,7 +20,8 @@ from tta.tta_dual_utils.GCM import *
 from tta.pattern_bank import *
 from tta.tta_dual_utils.model_manager import TTAModelManager
 from tta.visualizer import TTAVisualizer
-from tta.utils import save_tta_results
+from tta.utils import save_summary_to_csv, save_tta_results
+from tta.zo_utils import OnlineMemoryProfiler, zero_order_step
 from tta.utils import TTADataManager
 from device_manager import global_device
 
@@ -124,12 +124,29 @@ def build_loss_fn(cfg) -> nn.Module:
     else:
         raise ValueError(f"Unknown Loss type: {loss_name}")
 
-def get_optimizer(optim_params, cfg):
+def get_optimizer(optim_params, cfg, lr=None, optimizer_name=None):
+    """Build the configured TTA optimizer, optionally overriding its LR."""
+    solver = cfg.SOLVER
+    optimizer_name = (
+        solver.OPTIMIZING_METHOD if optimizer_name is None else optimizer_name
+    ).lower()
+    optimizer_lr = solver.BASE_LR if lr is None else lr
+    if optimizer_name == "sgd":
+        return torch.optim.SGD(
+            optim_params,
+            lr=optimizer_lr,
+            momentum=solver.MOMENTUM,
+            weight_decay=solver.WEIGHT_DECAY,
+            dampening=solver.DAMPENING,
+            nesterov=solver.NESTEROV,
+        )
+    if optimizer_name == "adam":
         return torch.optim.Adam(
             optim_params,
-            lr=cfg.SOLVER.BASE_LR,
-            weight_decay=cfg.SOLVER.WEIGHT_DECAY
+            lr=optimizer_lr,
+            weight_decay=solver.WEIGHT_DECAY,
         )
+    raise NotImplementedError(f"Unsupported TTA optimizer: {solver.OPTIMIZING_METHOD}")
 
 class Adapter(nn.Module):
     def __init__(self, cfg, model: nn.Module, norm_module=None):
@@ -144,9 +161,7 @@ class Adapter(nn.Module):
 
         self.manager = TTAModelManager(model, norm_module, self.cali)
         trainable_params = self.manager.configure_adaptation(cfg.TTA.MODULE_NAMES_TO_ADAPT)
-        self.manager.snapshot()
         self.optimizer = get_optimizer(trainable_params, cfg.TTA)
-        self.optimizer_state = deepcopy(self.optimizer.state_dict())
         
         if cfg.TTA.DOMAIN_SHIFT:
             self.test_loader = get_domain_shift_dataloader(cfg)
@@ -165,6 +180,11 @@ class Adapter(nn.Module):
         self.pred_step_end_dict = {}
         self.inputs_dict = {}
         self.n_adapt = 0
+
+        self.update_method = "zo" if cfg.TTA.ZO.ENABLE else "bp"
+        self.memory_profiler = OnlineMemoryProfiler(
+            enabled=cfg.TTA.ZO.PROFILE_MEMORY
+        )
 
         cali_name = getattr(self.cfg.TTA.DUAL, 'CALI_NAME', 'unknown')
 
@@ -197,6 +217,18 @@ class Adapter(nn.Module):
         else:
             parts.append(f"{cali_name}-offline")
             parts.append(f'{self.cfg.TTA.SOLVER.BASE_LR:.5f}')
+        if self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED:
+            if self.cfg.TTA.ZO.ENABLE:
+                parts.extend([
+                    "zo",
+                    f"c-{self.cfg.TTA.ZO.PERTURBATION_SCALE:g}",
+                    f"k-{self.cfg.TTA.ZO.SP_AVG}",
+                ])
+                if self.cfg.TTA.ZO.BLOCKWISE:
+                    parts.append("blockwise")
+            else:
+                parts.append("bp")
+            parts.append(f"s-{self.cfg.TTA.DUAL.STEPS}")
 
         self.save_name = "-".join(parts)
         self.mse_all = []
@@ -217,20 +249,22 @@ class Adapter(nn.Module):
             
             print("Adapter pre-training completed.")
             optim_params = self.cali.out_cali.get_optim_params()
-            self.optimizer = torch.optim.Adam(
+            self.optimizer = get_optimizer(
                 optim_params,
+                self.cfg.TTA,
                 lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
-                weight_decay=cfg.SOLVER.WEIGHT_DECAY
-            ) 
+                optimizer_name=self.cfg.TTA.DUAL.COBA_ONLINE_OPTIMIZER,
+            )
         elif isinstance(self.cali.out_cali, CoBA_online_only):
             self.cali.out_cali.online_mode = self.cfg.TTA.DUAL.COBA_ONLINE_ENABLED
             print("Adapter set to online-only mode.")
             optim_params = self.cali.out_cali.get_optim_params()
-            self.optimizer = torch.optim.Adam(
+            self.optimizer = get_optimizer(
                 optim_params,
+                self.cfg.TTA,
                 lr=self.cfg.TTA.DUAL.COBA_ONLINE_LR,
-                weight_decay=cfg.SOLVER.WEIGHT_DECAY
-            ) 
+                optimizer_name=self.cfg.TTA.DUAL.COBA_ONLINE_OPTIMIZER,
+            )
         else:
             print("No adapter pre-training needed.")
 
@@ -320,8 +354,9 @@ class Adapter(nn.Module):
                     print(f"[!] Warning: Failed to visualize knowledge vectors: {e}")
 
     def _reset(self):
+        # CoBA-Vis is a single streaming pass; no source-model snapshot is kept.
+        # reset() is therefore a no-op unless a caller explicitly snapshots.
         self.manager.reset()
-        self.optimizer.load_state_dict(deepcopy(self.optimizer_state))
 
     def _switch_model_to_train(self):
         self.manager.train()
@@ -342,100 +377,180 @@ class Adapter(nn.Module):
         period *= self.cfg.TTA.DUAL.PERIOD_N
         batch_size = period + 1
         return period, batch_size
-    
-    def _adapt_with_full_ground_truth_if_available(self):
-        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.05)
+
+    def _calibrate_online_output(self, pred, inputs):
+        if self.cali.output_calibration is None:
+            return pred
+        if isinstance(
+            self.cali.out_cali,
+            (
+                RoCoBA_FreqDomain_Norm,
+                CoBA_Freq_Adapter,
+                Freq_Add_Adapter,
+                CoBA_TF_Adapter,
+                PKA_GCM,
+            ),
+        ):
+            enc_window = prepare_inputs(inputs)[0]
+            return self.cali.output_calibration(pred, enc_window)
+        return self.cali.output_calibration(pred)
+
+    def _compute_online_loss(self, pred, ground_truth):
+        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.01)
         lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
         budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
-        
+
+        if isinstance(self.cali.out_cali, Freq_Add_Adapter):
+            task_loss = self.loss_fn(pred, ground_truth)
+            ortho_loss = self.cali.out_cali.get_orthogonal_loss()
+            budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
+            return task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
+        if isinstance(self.loss_fn, CoBA_Loss):
+            return self.loss_fn(
+                pred, ground_truth, bases=self.cali.out_cali.static_keys
+            )
+        if isinstance(self.loss_fn, LowRankCoBALoss):
+            return self.loss_fn(
+                pred,
+                ground_truth,
+                bases_left=self.cali.out_cali.bases_left,
+                bases_right=self.cali.out_cali.bases_right,
+            )
+        if isinstance(self.loss_fn, FreqLowRankCoBALoss):
+            return self.loss_fn(
+                pred,
+                ground_truth,
+                real_left=self.cali.out_cali.bases_left_r,
+                real_right=self.cali.out_cali.bases_right_r,
+                imag_left=self.cali.out_cali.bases_left_i,
+                imag_right=self.cali.out_cali.bases_right_i,
+            )
+        if isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
+            return self.loss_fn(
+                pred,
+                ground_truth,
+                bases_r=self.cali.out_cali.bases_r,
+                bases_i=self.cali.out_cali.bases_i,
+            )
+        if isinstance(self.loss_fn, DiversityCoBALoss):
+            return self.loss_fn(
+                pred,
+                ground_truth,
+                bases_r=self.cali.out_cali.bases_r,
+                bases_i=self.cali.out_cali.bases_i,
+                keys=self.cali.out_cali.codebook_keys,
+            )
+        return self.loss_fn(pred, ground_truth)
+
+    def _online_optimizer_step(
+        self, loss_closure, adapter_profile_closure, active_inputs=()
+    ):
+        self.memory_profiler.measure_matched_no_grad(loss_closure)
+        self.memory_profiler.measure_online_state(
+            adapter=self.cali,
+            optimizer=self.optimizer,
+            history=self.inputs_dict,
+            active_inputs=active_inputs,
+        )
+        self.memory_profiler.measure_adapter_loss_forward(adapter_profile_closure)
+        self.memory_profiler.begin_step()
+        try:
+            optimizer_params = [
+                parameter
+                for group in self.optimizer.param_groups
+                for parameter in group["params"]
+            ]
+            with self.memory_profiler.track_saved_tensors(optimizer_params):
+                if self.cfg.TTA.ZO.ENABLE:
+                    return zero_order_step(
+                        optimizer=self.optimizer,
+                        loss_closure=loss_closure,
+                        perturbation_scale=self.cfg.TTA.ZO.PERTURBATION_SCALE,
+                        sp_avg=self.cfg.TTA.ZO.SP_AVG,
+                        distribution=self.cfg.TTA.ZO.DISTRIBUTION,
+                        blockwise=self.cfg.TTA.ZO.BLOCKWISE,
+                    )
+                self.optimizer.zero_grad(set_to_none=True)
+                loss = loss_closure()
+                loss.backward()
+                self.optimizer.step()
+                return loss.detach()
+        finally:
+            self.memory_profiler.end_step()
+
+    def _adapt_with_full_ground_truth_if_available(self):
         while self.cur_step >= self.pred_step_end_dict[min(self.pred_step_end_dict.keys())]:
             batch_idx_available = min(self.pred_step_end_dict.keys())
             inputs_history = self.inputs_dict.pop(batch_idx_available)
             for _ in range(self.cfg.TTA.DUAL.STEPS):
                 self.n_adapt += 1
-                
                 self._switch_model_to_train()
 
+                def loss_closure():
+                    current_inputs = inputs_history
+                    with torch.no_grad():
+                        if self.cali.input_calibration is not None:
+                            current_inputs = self.cali.input_calibration(current_inputs)
+                        pred, ground_truth = forecast(
+                            self.cfg, current_inputs, self.model, self.norm_module
+                        )
+                    pred = self._calibrate_online_output(pred, current_inputs)
+                    return self._compute_online_loss(pred, ground_truth)
+
+                profile_inputs = inputs_history
                 with torch.no_grad():
                     if self.cali.input_calibration is not None:
-                        inputs_history = self.cali.input_calibration(inputs_history)
-                    pred, ground_truth = forecast(self.cfg, inputs_history, self.model, self.norm_module)
-                
-                if self.cali.output_calibration is not None:
-                    if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
-                        enc_history = prepare_inputs(inputs_history)[0]
-                        pred = self.cali.output_calibration(pred, enc_history)
-                    else:
-                        pred = self.cali.output_calibration(pred)
-                
-                # [修改 5] 在在线学习/全局微调阶段增加复合损失
-                if isinstance(self.cali.out_cali, Freq_Add_Adapter):
-                    task_loss = self.loss_fn(pred, ground_truth)
-                    ortho_loss = self.cali.out_cali.get_orthogonal_loss()
-                    budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
-                    loss = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
-                elif isinstance(self.loss_fn, CoBA_Loss):
-                    # loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.bases)
-                    loss = self.loss_fn(pred, ground_truth, bases=self.cali.out_cali.static_keys)
-                elif isinstance(self.loss_fn, LowRankCoBALoss):
-                    loss = self.loss_fn(pred, ground_truth, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
-                elif isinstance(self.loss_fn, (FreqLowRankCoBALoss)):
-                    loss = self.loss_fn(pred, ground_truth, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
-                elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
-                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
-                elif isinstance(self.loss_fn, DiversityCoBALoss):
-                    loss = self.loss_fn(pred, ground_truth, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
-                else:
-                    loss = self.loss_fn(pred, ground_truth) 
+                        profile_inputs = self.cali.input_calibration(profile_inputs)
+                    profile_pred, profile_ground_truth = forecast(
+                        self.cfg,
+                        profile_inputs,
+                        self.model,
+                        self.norm_module,
+                    )
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                def adapter_profile_closure():
+                    candidate = self._calibrate_online_output(
+                        profile_pred, profile_inputs
+                    )
+                    return self._compute_online_loss(
+                        candidate, profile_ground_truth
+                    )
+
+                self._online_optimizer_step(
+                    loss_closure,
+                    adapter_profile_closure,
+                    active_inputs=inputs_history,
+                )
+                del profile_pred, profile_ground_truth
                 self._switch_model_to_eval()
             
             self.pred_step_end_dict.pop(batch_idx_available)
 
     def _adapt_with_partial_ground_truth(self, inputs, pred, ground_truth, period, batch_size, batch_idx):
-        lam_ortho = getattr(self.cfg.TTA.DUAL, 'LAMBDA_ORTHO', 0.01)
-        lam_budget = getattr(self.cfg.TTA.DUAL, 'LAMBDA_BUDGET', 1.0)
-        budget_gamma = getattr(self.cfg.TTA.DUAL, 'BUDGET_GAMMA', 0.05)
-        
+        base_pred = pred.detach()
         for _ in range(self.cfg.TTA.DUAL.STEPS):
             self.n_adapt += 1
-        
-            if self.cali.output_calibration is not None:
-                if isinstance(self.cali.out_cali, (RoCoBA_FreqDomain_Norm, CoBA_Freq_Adapter, Freq_Add_Adapter, CoBA_TF_Adapter, PKA_GCM)):
-                    enc_window = prepare_inputs(inputs)[0]
-                    # 这一步前向传播会计算并记录 Freq_Add_Adapter 的 relative_energy
-                    pred = self.cali.output_calibration(pred, enc_window)
-                else:
-                    pred = self.cali.output_calibration(pred)
-            
-            pred_partial, ground_truth_partial = pred[0][:period], ground_truth[0][:period]
-            
-            # [修改 6] Partial 阶段复用提取的 budget 和 ortho loss
-            if isinstance(self.cali.out_cali, Freq_Add_Adapter):
-                task_loss = self.loss_fn(pred_partial, ground_truth_partial)
-                ortho_loss = self.cali.out_cali.get_orthogonal_loss()
-                budget_loss = self.cali.out_cali.get_budget_loss(gamma=budget_gamma)
-                loss_partial = task_loss + lam_ortho * ortho_loss + lam_budget * budget_loss
-            elif isinstance(self.loss_fn, CoBA_Loss):
-                # loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.bases)
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases=self.cali.out_cali.static_keys)
-            elif isinstance(self.loss_fn, LowRankCoBALoss):
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_left=self.cali.out_cali.bases_left, bases_right=self.cali.out_cali.bases_right)
-            elif isinstance(self.loss_fn, FreqLowRankCoBALoss):
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, real_left=self.cali.out_cali.bases_left_r, real_right=self.cali.out_cali.bases_right_r, imag_left=self.cali.out_cali.bases_left_i, imag_right=self.cali.out_cali.bases_right_i)
-            elif isinstance(self.loss_fn, (FreqElementWiseCoBALoss, FreqElementWiseSPLoss)):
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i)
-            elif isinstance(self.loss_fn, DiversityCoBALoss):
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial, bases_r=self.cali.out_cali.bases_r, bases_i=self.cali.out_cali.bases_i, keys=self.cali.out_cali.codebook_keys)
-            else:
-                loss_partial = self.loss_fn(pred_partial, ground_truth_partial) 
-                
-            self.optimizer.zero_grad()
-            loss_partial.backward()
-            self.optimizer.step()
+
+            def loss_closure():
+                candidate = self._calibrate_online_output(base_pred, inputs)
+                return self._compute_online_loss(
+                    candidate[0][:period], ground_truth[0][:period]
+                )
+
+            def adapter_profile_closure():
+                candidate = self._calibrate_online_output(base_pred, inputs)
+                return self._compute_online_loss(
+                    candidate[0][:period], ground_truth[0][:period]
+                )
+
+            with torch.no_grad():
+                pred = self._calibrate_online_output(base_pred, inputs)
+
+            self._online_optimizer_step(
+                loss_closure,
+                adapter_profile_closure,
+                active_inputs=inputs,
+            )
         return pred, ground_truth
 
     @torch.no_grad()
@@ -471,6 +586,31 @@ class Adapter(nn.Module):
             mae_after_tta=self.mae_all.mean(),
             save_dir=self.cfg.RESULT_DIR
         )
+        memory_record = {
+            "method": self.update_method,
+            "optimizer": self.cfg.TTA.DUAL.COBA_ONLINE_OPTIMIZER.lower(),
+            "tta_method": self.save_name,
+            "model": self.cfg.MODEL.NAME,
+            "dataset_name": dataset_name,
+            "pred_len": self.cfg.DATA.PRED_LEN,
+            "seed": self.cfg.SEED,
+            "steps_per_batch": self.cfg.TTA.DUAL.STEPS,
+            "zo_directions": self.cfg.TTA.ZO.SP_AVG if self.cfg.TTA.ZO.ENABLE else 0,
+            "zo_blockwise": bool(self.cfg.TTA.ZO.BLOCKWISE),
+            **self.memory_profiler.summary(),
+        }
+        save_summary_to_csv(
+            memory_record,
+            csv_path=os.path.join(self.cfg.RESULT_DIR, "online_memory_results.csv"),
+            key_fields=[
+                "method",
+                "tta_method",
+                "model",
+                "dataset_name",
+                "pred_len",
+                "seed",
+            ],
+        )
         self.model.eval()
 
         full_data = self.data_manager.get_full_data()
@@ -487,6 +627,22 @@ class Adapter(nn.Module):
         print(f"Final {tta_method} TTA Results for pred_len: {self.cfg.DATA.PRED_LEN}:")
         print(f"MSE mean: {self.mse_all.mean()}")
         print(f"MSE per channles: {self.mse_per_var_all.mean(axis=0)}")
+        print(
+            "Online update memory "
+            f"({self.update_method.upper()}): "
+            f"{memory_record['peak_allocated_mb']:.2f} MiB peak allocated, "
+            f"{memory_record['peak_incremental_allocated_mb']:.2f} MiB "
+            "peak incremental allocated, "
+            f"{memory_record['peak_update_excess_over_no_grad_mb']:.2f} MiB "
+            "peak excess over matched no-grad forward, "
+            f"{memory_record['peak_saved_tensors_mb']:.2f} MiB saved for backward, "
+            f"{memory_record['history_cache_logical_mb']:.2f} MiB history cache, "
+            f"{memory_record['adapter_state_mb']:.2f} MiB adapter state, "
+            f"{memory_record['accounted_online_adaptation_lower_bound_mb']:.2f}-"
+            f"{memory_record['accounted_online_adaptation_upper_bound_mb']:.2f} MiB "
+            "accounted online-adaptation memory, "
+            f"{memory_record['mean_update_seconds']:.4f} s/update"
+        )
     
     def adapt(self):
         self.data_manager.reset()

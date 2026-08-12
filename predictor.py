@@ -12,7 +12,7 @@ from datasets.loader import get_val_dataloader, get_test_dataloader, get_domain_
 from utils.misc import prepare_inputs
 from utils.misc import mkdir
 from config import get_norm_method
-from tta.utils import save_tta_results
+from tta.utils import save_summary_to_csv, save_tta_results
 from device_manager import global_device
 
 class Predictor:
@@ -31,6 +31,7 @@ class Predictor:
             self.val_loader = get_val_dataloader(cfg)
             self.test_loader = get_test_dataloader(cfg)
         
+        self.test_inference_memory = {}
         self.test_errors, self.val_errors = self._get_test_errors(), self._get_val_errors()
 
     @torch.no_grad()
@@ -66,6 +67,31 @@ class Predictor:
                          pred_len=self.cfg.DATA.PRED_LEN,
                          mse_after_tta=self.test_errors['mse'].mean().astype(float),
                          mae_after_tta=self.test_errors['mae'].mean().astype(float),)
+        if self.test_inference_memory:
+            memory_record = {
+                "method": "base",
+                "model": self.cfg.MODEL.NAME,
+                "dataset_name": dataset_name,
+                "pred_len": self.cfg.DATA.PRED_LEN,
+                "seed": self.cfg.SEED,
+                "batch_size": self.cfg.TEST.BATCH_SIZE,
+                **self.test_inference_memory,
+            }
+            save_summary_to_csv(
+                memory_record,
+                csv_path=os.path.join(
+                    self.cfg.RESULT_DIR, "base_inference_memory_results.csv"
+                ),
+                key_fields=[
+                    "method", "model", "dataset_name", "pred_len", "seed", "batch_size"
+                ],
+            )
+            print(
+                "Base inference memory: "
+                f"{memory_record['peak_allocated_mb']:.2f} MiB peak allocated, "
+                f"{memory_record['peak_incremental_allocated_mb']:.2f} MiB "
+                "peak incremental allocated"
+            )
 
     @torch.no_grad()
     def _get_errors_from_dataloader(self, dataloader, tta=False, split='test'):
@@ -74,8 +100,17 @@ class Predictor:
         mse_all = []
         mae_all = []
         mse_per_var_all = []
-        
+        profile_cuda = split == "test" and torch.cuda.is_available()
+        num_batches = 0
+        if profile_cuda:
+            torch.cuda.synchronize()
+            allocated_before = torch.cuda.memory_allocated()
+            torch.cuda.reset_peak_memory_stats()
+        else:
+            allocated_before = 0
+
         for inputs in tqdm(dataloader, desc='Calculating Errors'):
+            num_batches += 1
             enc_window_raw, enc_window_stamp, dec_window, dec_window_stamp = prepare_inputs(inputs)
             if self.norm_method == 'SAN':
                 enc_window, statistics_pred = self.norm_module.normalize(enc_window_raw)
@@ -136,6 +171,21 @@ class Predictor:
             mae_all.append(mae)
             mse_per_var_all.append(mse_per_var)
                 
+        if profile_cuda:
+            torch.cuda.synchronize()
+            peak_allocated = torch.cuda.max_memory_allocated()
+            self.test_inference_memory = {
+                "num_batches": num_batches,
+                "allocated_before_mb": allocated_before / (1024.0 ** 2),
+                "peak_allocated_mb": peak_allocated / (1024.0 ** 2),
+                "peak_reserved_mb": (
+                    torch.cuda.max_memory_reserved() / (1024.0 ** 2)
+                ),
+                "peak_incremental_allocated_mb": (
+                    max(0, peak_allocated - allocated_before) / (1024.0 ** 2)
+                ),
+            }
+
         mse_all = torch.flatten(torch.concat(mse_all, dim=0)).cpu().numpy()
         mae_all = torch.flatten(torch.concat(mae_all, dim=0)).cpu().numpy()
         mse_per_var_all = torch.concat(mse_per_var_all, dim=0).cpu().numpy()

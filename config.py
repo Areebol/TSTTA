@@ -95,6 +95,17 @@ _C.TTA.SOLVER.MOMENTUM = 0.9
 _C.TTA.SOLVER.NESTEROV = True
 _C.TTA.SOLVER.DAMPENING = 0.0
 
+# Backpropagation-free online adaptation. Offline adapter pretraining keeps its
+# original optimizer; these options affect only updates on the target stream.
+_C.TTA.ZO = CN()
+_C.TTA.ZO.ENABLE = False
+_C.TTA.ZO.PERTURBATION_SCALE = 1e-3
+_C.TTA.ZO.SP_AVG = 1
+_C.TTA.ZO.DISTRIBUTION = "rademacher"  # rademacher, segmented_uniform
+_C.TTA.ZO.BLOCKWISE = False
+_C.TTA.ZO.PROFILE_MEMORY = True
+
+
 # TAFAS hyperparameters
 _C.TTA.TAFAS = CN()
 _C.TTA.TAFAS.PAAS = True
@@ -277,6 +288,7 @@ _C.TTA.DUAL.CALI_OUTPUT_ENABLE = True
 _C.TTA.DUAL.GCM_N_BASES = 32
 _C.TTA.DUAL.COBA_ONLINE_ENABLED = False
 _C.TTA.DUAL.COBA_ONLINE_LR = 1e-3
+_C.TTA.DUAL.COBA_ONLINE_OPTIMIZER = "adam"
 _C.TTA.DUAL.PRETRAIN_EPOCHS = 5
 _C.TTA.DUAL.GCM_FEA_DIM = 32
 _C.TTA.DUAL.LOWRANK_RANKS = 16
